@@ -1,0 +1,26 @@
+[
+    // For Assembling Only
+    {
+        "key": "ctrl+shit+b",
+        "command": "workbench.action.tasks.build",
+        "when": "taskCommandsRegistered"
+    }, 
+    // For Assembling and Linking
+    {
+        "key": "ctrl+alt+a",
+        "command": "workbench.action.tasks.runTask", 
+        "args": "Assemble and Link"
+    }, 
+    // For Assembling and Running
+    {
+        "key": "ctrl+alt+x",
+        "command": "workbench.action.tasks.test",
+        "when": "taskCommandsRegistered"
+    }, 
+    // For Assembling and Debugging
+    {
+        "key": "ctrl+alt+z",
+        "command":"workbench.action.tasks.runTask", 
+        "args": "Assemble and Debug"
+    }
+]
