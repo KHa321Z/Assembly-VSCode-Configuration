@@ -1,0 +1,17 @@
+{
+    "version": "0.2.0", 
+    "configurations": [
+        {
+            "name": "Debug Assembly in DOSBox", 
+            "type": "cppdbg", // Dummy Debugger
+            "request": "launch", 
+            "program": "${workspaceFolder}\\${fileBasenameNoExtension}.COM", 
+            "preLaunchTask": "Assemble and Debug",
+            "cwd": "${workspaceFolder}",
+            "externalConsole": true, 
+            "stopAtEntry": false, 
+            "miDebuggerPath": "/usr/bin/gdb", // Dummy Path
+            "MIMode": "gdb" // Dummy Mode
+        }
+    ]
+}

@@ -1,0 +1,83 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "type": "shell",
+            "label": "Assemble Only",
+            "command": "${workspaceFolder}\\DOSBoxPortable\\DOSBoxPortable.exe",
+            "args": [
+                "-c",
+                "mount c ${workspaceFolder}",
+                "-c",
+                "c:",
+                "-c",
+                "\\Tools\\nasm \\${relativeFileDirname}\\${fileBasename} -o \\${relativeFileDirname}\\${fileBasenameNoExtension}.COM",
+                "-c",
+                "exit"
+            ],
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            },
+            "problemMatcher": [],
+            "detail": "Task to assemble an assembly file using NASM"
+        },
+        {
+            "type": "shell",
+            "label": "Assemble and Link",
+            "command": "${workspaceFolder}\\DOSBoxPortable\\DOSBoxPortable.exe",
+            "args": [
+                "-c",
+                "mount c ${workspaceFolder}",
+                "-c",
+                "c:",
+                "-c",
+                "\\Tools\\nasm \\${relativeFileDirname}\\${fileBasename} -l \\${relativeFileDirname}\\${fileBasenameNoExtension}.LST -o \\${relativeFileDirname}\\${fileBasenameNoExtension}.COM",
+                "-c",
+                "exit"
+            ],
+            "group": "build",
+            "problemMatcher": [],
+            "detail": "Task to assemble and link an assembly file using NASM"
+        },
+        {
+            "type": "shell",
+            "label": "Assemble and Run",
+            "command": "${workspaceFolder}\\DOSBoxPortable\\DOSBoxPortable.exe",
+            "args": [
+                "-c",
+                "mount c ${workspaceFolder}",
+                "-c",
+                "c:",
+                "-c",
+                "\\Tools\\nasm \\${relativeFileDirname}\\${fileBasename} -l \\${relativeFileDirname}\\${fileBasenameNoExtension}.LST -o \\${relativeFileDirname}\\${fileBasenameNoExtension}.COM",
+                "-c",
+                "\\${relativeFileDirname}\\${fileBasenameNoExtension}.COM"
+            ],
+            "group": {
+                "kind": "test",
+                "isDefault": true
+            },
+            "problemMatcher": [],
+            "detail": "Task to assemble and run the assembled and linked program"
+        },
+        {
+            "type": "shell",
+            "label": "Assemble and Debug",
+            "command": "${workspaceFolder}\\DOSBoxPortable\\DOSBoxPortable.exe",
+            "args": [
+                "-c",
+                "mount c ${workspaceFolder}",
+                "-c",
+                "c:",
+                "-c",
+                "\\Tools\\nasm \\${relativeFileDirname}\\${fileBasename} -l \\${relativeFileDirname}\\${fileBasenameNoExtension}.LST -o \\${relativeFileDirname}\\${fileBasenameNoExtension}.COM",
+                "-c",
+                "\\Tools\\afd \\${relativeFileDirname}\\${fileBasenameNoExtension}.COM"
+            ],
+            "group": "test",
+            "problemMatcher": [],
+            "detail": "Task to assemble and debug the assembled and linked program using afd"
+        }
+    ]
+}
