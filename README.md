@@ -22,8 +22,11 @@ A Template created for **VSCode** to Edit, Assemble and Debug **.asm** files usi
 
 For Linking and Debugging you'll have to do a workaround unless you have keybinds set up globally. The procedure to link or debug your code is as follows:
 1. Press `Ctrl + Shift + P` to open Command Pallete (A Drop-down Menu along with a Text-Field).
-2. Write `Run Tasks` and Press `Enter`.
+![Command Palette](misc\cmd_pallete.png)
+2. Write `Run Task` and Press `Enter`.
+![Run Task](misc\run_task.png)
 3. You will see 4 Tasks from which you can choose using `Arrow keys` and Pressing `Enter`.
+![Tasks](misc\tasks.png)
 4. The Selected `Task` will then run.
 
 
