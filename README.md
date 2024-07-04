@@ -29,7 +29,7 @@ For Linking and Debugging you'll have to do a workaround unless you have keybind
 ![Tasks](https://github.com/KHa321Z/Assembly-VSCode-Configuration/blob/main/misc/tasks.png)
 4. The Selected `Task` will then run.
 
-**Heads Up:** For the **Running and Debugging Tasks** the DOSBox window will open once for Assembling the Code after which it will close and once again open to continue with Running or Debugging the Assembly File.
+**Heads Up:** For the `Running and Debugging Tasks` the DOSBox window will open once for Assembling the Code after which it will close and once again open to continue with Running or Debugging the Assembly File. So don't get Scared with the sudden Pop-ups hehe.
 
 ### Note:
 This configuration has been designed for students studying **COAL** course at **FAST-NUCES**. For **Notepad++** version you can refer to this link [here](https://github.com/ASD0x41/Assembly-Programming-Package/tree/main). Share this Repo if you find it useful >_<
