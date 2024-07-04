@@ -2,19 +2,25 @@
     "version": "2.0.0",
     "tasks": [
         {
+            "type": "shell", 
+            "label": "Set Conf File", 
+            "command": "${workspaceFolder}\\configure.bat", 
+            "args": [
+                "'${workspaceFolder}'"
+            ],
+            "group": "none", 
+            "problemMatcher": [],
+            "detail": "Task to set the configuration file for DOSBox"
+        },  
+        {
             "type": "shell",
             "label": "Assemble Only",
             "command": "${workspaceFolder}\\DOSBoxPortable\\DOSBoxPortable.exe",
             "args": [
-                "-c",
-                "mount c ${workspaceFolder}",
-                "-c",
-                "c:",
-                "-c",
-                "\\Tools\\nasm \\${relativeFileDirname}\\${fileBasename} -o \\${relativeFileDirname}\\${fileBasenameNoExtension}.COM",
-                "-c",
-                "exit"
+                "-c", "\\Tools\\nasm \\${relativeFileDirname}\\${fileBasename} -o \\${relativeFileDirname}\\${fileBasenameNoExtension}.COM",
+                "-c", "exit"
             ],
+            "dependsOn": "Set Conf File",
             "group": {
                 "kind": "build",
                 "isDefault": true
@@ -27,15 +33,10 @@
             "label": "Assemble and Link",
             "command": "${workspaceFolder}\\DOSBoxPortable\\DOSBoxPortable.exe",
             "args": [
-                "-c",
-                "mount c ${workspaceFolder}",
-                "-c",
-                "c:",
-                "-c",
-                "\\Tools\\nasm \\${relativeFileDirname}\\${fileBasename} -l \\${relativeFileDirname}\\${fileBasenameNoExtension}.LST -o \\${relativeFileDirname}\\${fileBasenameNoExtension}.COM",
-                "-c",
-                "exit"
+                "-c", "\\Tools\\nasm \\${relativeFileDirname}\\${fileBasename} -l \\${relativeFileDirname}\\${fileBasenameNoExtension}.LST -o \\${relativeFileDirname}\\${fileBasenameNoExtension}.COM",
+                "-c", "exit"
             ],
+            "dependsOn": "Set Conf File",
             "group": "build",
             "problemMatcher": [],
             "detail": "Task to assemble and link an assembly file using NASM"
@@ -45,14 +46,11 @@
             "label": "Assemble and Run",
             "command": "${workspaceFolder}\\DOSBoxPortable\\DOSBoxPortable.exe",
             "args": [
-                "-c",
-                "mount c ${workspaceFolder}",
-                "-c",
-                "c:",
-                "-c",
-                "\\Tools\\nasm \\${relativeFileDirname}\\${fileBasename} -l \\${relativeFileDirname}\\${fileBasenameNoExtension}.LST -o \\${relativeFileDirname}\\${fileBasenameNoExtension}.COM",
-                "-c",
-                "\\${relativeFileDirname}\\${fileBasenameNoExtension}.COM"
+                "-c", "\\${relativeFileDirname}\\${fileBasenameNoExtension}.COM"
+            ],
+            "dependsOn": [
+                "Set Conf File",
+                "Assemble and Link"
             ],
             "group": {
                 "kind": "test",
@@ -66,14 +64,11 @@
             "label": "Assemble and Debug",
             "command": "${workspaceFolder}\\DOSBoxPortable\\DOSBoxPortable.exe",
             "args": [
-                "-c",
-                "mount c ${workspaceFolder}",
-                "-c",
-                "c:",
-                "-c",
-                "\\Tools\\nasm \\${relativeFileDirname}\\${fileBasename} -l \\${relativeFileDirname}\\${fileBasenameNoExtension}.LST -o \\${relativeFileDirname}\\${fileBasenameNoExtension}.COM",
-                "-c",
-                "\\Tools\\afd \\${relativeFileDirname}\\${fileBasenameNoExtension}.COM"
+                "-c", "\\Tools\\afd \\${relativeFileDirname}\\${fileBasenameNoExtension}.COM"
+            ],
+            "dependsOn": [
+                "Set Conf File",
+                "Assemble and Link"
             ],
             "group": "test",
             "problemMatcher": [],
