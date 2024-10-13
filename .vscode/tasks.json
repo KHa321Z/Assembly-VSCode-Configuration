@@ -15,28 +15,21 @@
         {
             "type": "shell",
             "label": "Assemble Only",
-            "command": "${workspaceFolder}\\DOSBoxPortable\\DOSBoxPortable.exe",
+            "command": "${workspaceFolder}\\Tools\\nasm",
             "args": [
-                "-c", "\\Tools\\nasm \\${relativeFileDirname}\\${fileBasename} -o \\${relativeFileDirname}\\${fileBasenameNoExtension}.COM",
-                "-c", "exit"
+                "${file}", "-o", "${fileDirname}\\${fileBasenameNoExtension}.COM"
             ],
-            "dependsOn": "Set Conf File",
-            "group": {
-                "kind": "build",
-                "isDefault": true
-            },
+            "group": "build",
             "problemMatcher": [],
             "detail": "Task to assemble an assembly file using NASM"
         },
         {
             "type": "shell",
             "label": "Assemble and Link",
-            "command": "${workspaceFolder}\\DOSBoxPortable\\DOSBoxPortable.exe",
+            "command": "${workspaceFolder}\\Tools\\nasm",
             "args": [
-                "-c", "\\Tools\\nasm \\${relativeFileDirname}\\${fileBasename} -l \\${relativeFileDirname}\\${fileBasenameNoExtension}.LST -o \\${relativeFileDirname}\\${fileBasenameNoExtension}.COM",
-                "-c", "exit"
+                "${file}", "-o", "${fileDirname}\\${fileBasenameNoExtension}.COM", "-l", "${fileDirname}\\${fileBasenameNoExtension}.LST"
             ],
-            "dependsOn": "Set Conf File",
             "group": "build",
             "problemMatcher": [],
             "detail": "Task to assemble and link an assembly file using NASM"
@@ -53,7 +46,7 @@
                 "Assemble and Link"
             ],
             "group": {
-                "kind": "test",
+                "kind": "build",
                 "isDefault": true
             },
             "problemMatcher": [],
@@ -70,7 +63,10 @@
                 "Set Conf File",
                 "Assemble and Link"
             ],
-            "group": "test",
+            "group": {
+                "kind": "test",
+                "isDefault": true
+            },
             "problemMatcher": [],
             "detail": "Task to assemble and debug the assembled and linked program using afd"
         }
