@@ -1,173 +1,355 @@
      1                                  [org 0x0100]
      2                                  
-     3 00000000 E9F000                      jmp start
+     3 00000000 E98A01                      jmp start
      4                                  
-     5 00000003 00000000                oldkbisr: dd 0
-     6 00000007 00000000                olddbisr: dd 0
-     7 0000000B 00<rep 80h>             filepath: times 128 db 0
-     8                                  
-     9                                  kbisr:
-    10 0000008B C3                          ret
+     5 00000003 0000                    orig_ss:    dw 0
+     6 00000005 0000                    orig_sp:    dw 0
+     7 00000007 00000000                oldkbisr:   dd 0
+     8 0000000B 00000000                oldtrapisr: dd 0
+     9 0000000F 00<rep 80h>             filepath:   times 128 db 0
+    10 0000008F 0000                    childseg:   dw 0
     11                                  
-    12                                  trapisr:
-    13 0000008C C3                          ret
+    12 00000091 00                      flag:       db 0
+    13 00000092 464C203D4353203D49-     names:      db 'FL =CS =IP =BP =AX =BX =CX =DX =SI =DI =DS =ES ='
+    13 0000009B 50203D4250203D4158-
+    13 000000A4 203D4258203D435820-
+    13 000000AD 3D4458203D5349203D-
+    13 000000B6 4449203D4453203D45-
+    13 000000BF 53203D             
     14                                  
-    15                                  hookISR: 
-    16 0000008D 50                          push ax
-    17 0000008E 06                          push es
-    18                                  
-    19 0000008F 31C0                        xor ax, ax
-    20 00000091 8EC0                        mov es, ax
-    21                                  
-    22 00000093 26A10400                    mov ax, [es:1 * 4]
-    23 00000097 A3[0700]                    mov [olddbisr], ax
-    24 0000009A 26A10600                    mov ax, [es:1 * 4 + 2]
-    25 0000009E A3[0900]                    mov [olddbisr + 2], ax
-    26 000000A1 26A12400                    mov ax, [es:9 * 4]
-    27 000000A5 A3[0300]                    mov [oldkbisr], ax
-    28 000000A8 26A12600                    mov ax, [es:9 * 4 + 2]
-    29 000000AC A3[0500]                    mov [oldkbisr + 2], ax
-    30                                  
-    31 000000AF FA                          cli
-    32 000000B0 26C7060400[8C00]            mov word [es:1 * 4], trapisr
-    33 000000B7 268C0E0600                  mov [es:1 * 4 + 2], cs
-    34 000000BC 26C7062400[8B00]            mov word [es:9 * 4], kbisr
-    35 000000C3 268C0E2600                  mov [es:9 * 4 + 2], cs
-    36 000000C8 FB                          sti
+    15                                  kbisr:
+    16 000000C2 50                          push ax
+    17                                  
+    18 000000C3 E460                        in al, 60h
+    19 000000C5 A880                        test al, 80h
+    20 000000C7 7505                        jnz skipflag
+    21 000000C9 2E0006[9100]                add byte [cs:flag], al
+    22                                  
+    23                                  skipflag:
+    24 000000CE B020                        mov al, 20h
+    25 000000D0 E620                        out 20h, al
+    26                                  
+    27 000000D2 58                          pop ax
+    28 000000D3 CF                          iret
+    29                                  
+    30                                  trapisr:
+    31 000000D4 55                          push bp
+    32 000000D5 89E5                        mov bp, sp
+    33                                  
+    34 000000D7 60                          pusha
+    35 000000D8 1E                          push ds
+    36 000000D9 06                          push es
     37                                  
-    38 000000C9 07                          pop es
-    39 000000CA 58                          pop ax
-    40                                  
-    41 000000CB C3                          ret
-    42                                  
-    43                                  unhookISR:
-    44 000000CC 50                          push ax
-    45 000000CD 06                          push es
-    46                                  
-    47 000000CE 31C0                        xor ax, ax
-    48 000000D0 8EC0                        mov es, ax
+    38 000000DA FB                          sti
+    39 000000DB 0E                          push cs
+    40 000000DC 1F                          pop ds
+    41                                  
+    42 000000DD C606[9100]00                mov byte [flag], 0
+    43 000000E2 E8F701                      call clrscrn
+    44                                  
+    45 000000E5 BE0600                      mov si, 6
+    46 000000E8 B90C00                      mov cx, 12
+    47 000000EB B80000                      mov ax, 0
+    48 000000EE BB0500                      mov bx, 5
     49                                  
-    50 000000D2 FA                          cli
-    51 000000D3 A1[0700]                    mov ax, [olddbisr]
-    52 000000D6 26A30400                    mov [es:1 * 4], ax
-    53 000000DA A1[0900]                    mov ax, [olddbisr + 2]
-    54 000000DD 26A30600                    mov [es:1 * 4 + 2], ax
-    55 000000E1 A1[0300]                    mov ax, [oldkbisr]
-    56 000000E4 26A32400                    mov [es:9 * 4], ax
-    57 000000E8 A1[0500]                    mov ax, [oldkbisr + 2]
-    58 000000EB 26A32600                    mov [es:9 * 4 + 2], ax
-    59 000000EF FB                          sti
-    60                                  
-    61 000000F0 07                          pop es
-    62 000000F1 58                          pop ax
-    63                                  
-    64 000000F2 C3                          ret
+    50                                  l3:
+    51 000000F1 50                          push ax
+    52 000000F2 53                          push bx
+    53 000000F3 8B12                        mov dx, [bp + si]
+    54 000000F5 52                          push dx
+    55 000000F6 E89601                      call printnum
+    56 000000F9 83EE02                      sub si, 2
+    57 000000FC 40                          inc ax
+    58 000000FD E2F2                        loop l3
+    59                                  
+    60 000000FF B80000                      mov ax, 0
+    61 00000102 BB0000                      mov bx, 0
+    62 00000105 B90C00                      mov cx, 12
+    63 00000108 BE0400                      mov si, 4
+    64 0000010B BA[9200]                    mov dx, names
     65                                  
-    66                                  start:
-    67                                      ; call hookISR
-    68                                  
-    69                                      ;-----resizing memory for debugger-----
-    70 000000F3 BB[7501]                    mov bx, terminate
-    71 000000F6 83C314                      add bx, 20
-    72 000000F9 C1EB04                      shr bx, 4
-    73                                  
-    74 000000FC 8CC8                        mov ax, cs
-    75 000000FE 8EC0                        mov es, ax
-    76 00000100 B44A                        mov ah, 4Ah
-    77 00000102 CD21                        int 21h
-    78                                  
-    79                                      ;-----allocating memory for child process-----
-    80 00000104 B80048                      mov ax, 4800h
-    81 00000107 BB0010                      mov bx, 1000h
-    82 0000010A CD21                        int 21h
-    83 0000010C 7218                        jc no_memory_available
-    84 0000010E 8EC0                        mov es, ax
-    85                                  
-    86 00000110 6A00                        push word 0
-    87 00000112 6A00                        push word 0
-    88 00000114 0E                          push cs
-    89 00000115 E81000                      call printnum
+    66                                  l1:
+    67 0000010E 50                          push ax
+    68 0000010F 53                          push bx
+    69 00000110 52                          push dx
+    70 00000111 56                          push si
+    71 00000112 E83C01                      call printstr
+    72 00000115 83C204                      add dx, 4
+    73 00000118 40                          inc ax
+    74 00000119 E2F3                        loop l1
+    75                                  
+    76                                  keywait:
+    77 0000011B 803E[9100]00                cmp byte [flag], 0
+    78 00000120 74F9                        je keywait
+    79                                  
+    80 00000122 07                          pop es
+    81 00000123 1F                          pop ds
+    82 00000124 61                          popa
+    83                                  
+    84 00000125 5D                          pop bp
+    85 00000126 CF                          iret
+    86                                  
+    87                                  hookISR: 
+    88 00000127 50                          push ax
+    89 00000128 06                          push es
     90                                  
-    91 00000118 6A01                        push word 1
-    92 0000011A 6A00                        push word 0
-    93 0000011C 06                          push es
-    94 0000011D E80800                      call printnum
-    95                                  
-    96                                      ; ;-----read file path-----
-    97                                      ; xor cx, cx
-    98                                      ; mov cl, [80h]
-    99                                      ; cmp cl, 0
-   100                                      ; jz no_filepath
-   101                                  
-   102                                      ; ; remove trailing spaces
-   103                                      ; dec cl
-   104                                      ; mov si, 82h
-   105                                      ; mov di, filepath
-   106                                      ; rep movsb
-   107                                  
-   108                                      ; ;-----open .COM file-----
-   109                                      ; mov ax, 3D00h
-   110                                      ; mov dx, filepath
-   111                                      ; int 21h
-   112                                      ; jc file_not_found
-   113                                      ; mov bx, ax
+    91 00000129 31C0                        xor ax, ax
+    92 0000012B 8EC0                        mov es, ax
+    93                                  
+    94 0000012D 26A10400                    mov ax, [es:1 * 4]
+    95 00000131 A3[0B00]                    mov [oldtrapisr], ax
+    96 00000134 26A10600                    mov ax, [es:1 * 4 + 2]
+    97 00000138 A3[0D00]                    mov [oldtrapisr + 2], ax
+    98 0000013B 26A12400                    mov ax, [es:9 * 4]
+    99 0000013F A3[0700]                    mov [oldkbisr], ax
+   100 00000142 26A12600                    mov ax, [es:9 * 4 + 2]
+   101 00000146 A3[0900]                    mov [oldkbisr + 2], ax
+   102                                  
+   103 00000149 FA                          cli
+   104 0000014A 26C7060400[D400]            mov word [es:1 * 4], trapisr
+   105 00000151 268C0E0600                  mov [es:1 * 4 + 2], cs
+   106 00000156 26C7062400[C200]            mov word [es:9 * 4], kbisr
+   107 0000015D 268C0E2600                  mov [es:9 * 4 + 2], cs
+   108 00000162 FB                          sti
+   109                                  
+   110 00000163 07                          pop es
+   111 00000164 58                          pop ax
+   112                                  
+   113 00000165 C3                          ret
    114                                  
-   115 00000120 EB53                        jmp terminate
-   116                                  
-   117                                  
-   118                                  no_filepath:
-   119 00000122 EBFE                        jmp no_filepath
-   120                                  
-   121                                  file_not_found:
-   122 00000124 EBFE                        jmp file_not_found
-   123                                  
-   124                                  no_memory_available:
-   125 00000126 EBFE                        jmp no_memory_available
-   126                                  
-   127                                  
-   128 00000128 55                      printnum: push bp
-   129 00000129 89E5                    mov bp, sp
-   130 0000012B 06                      push es
-   131 0000012C 50                      push ax
-   132 0000012D 53                      push bx
-   133 0000012E 51                      push cx
-   134 0000012F 52                      push dx
-   135 00000130 57                      push di
-   136 00000131 BF5000                  mov di, 80 ; load di with columns per row
-   137 00000134 8B4608                  mov ax, [bp+8] ; load ax with row number
-   138 00000137 F7E7                    mul di ; multiply with columns per row
-   139 00000139 89C7                    mov di, ax ; save result in di
-   140 0000013B 037E06                  add di, [bp+6] ; add column number
-   141 0000013E D1E7                    shl di, 1 ; turn into byte count
-   142 00000140 83C708                  add di, 8 ; to end of number location
-   143 00000143 B800B8                  mov ax, 0xb800
-   144 00000146 8EC0                    mov es, ax ; point es to video base
-   145 00000148 8B4604                  mov ax, [bp+4] ; load number in ax
-   146 0000014B BB1000                  mov bx, 16 ; use base 16 for division
-   147 0000014E B90400                  mov cx, 4 ; initialize count of digits
-   148 00000151 BA0000                  nextdigit: mov dx, 0 ; zero upper half of dividend
-   149 00000154 F7F3                    div bx ; divide by 10
-   150 00000156 80C230                  add dl, 0x30 ; convert digit into ascii value
-   151 00000159 80FA39                  cmp dl, 0x39 ; is the digit an alphabet
-   152 0000015C 7603                    jbe skipalpha ; no, skip addition
-   153 0000015E 80C207                  add dl, 7 ; yes, make in alphabet code
-   154 00000161 B607                    skipalpha: mov dh, 0x07 ; attach normal attribute
-   155 00000163 268915                  mov [es:di], dx ; print char on screen
-   156 00000166 83EF02                  sub di, 2 ; to previous screen location
-   157 00000169 E2E6                    loop nextdigit ; if no divide it again
-   158 0000016B 5F                      pop di
-   159 0000016C 5A                      pop dx
-   160 0000016D 59                      pop cx
-   161 0000016E 5B                      pop bx
-   162 0000016F 58                      pop ax
-   163 00000170 07                      pop es
-   164 00000171 5D                      pop bp
-   165 00000172 C20600                  ret 6
-   166                                  
-   167                                  
-   168                                  
-   169                                  
+   115                                  unhookISR:
+   116 00000166 50                          push ax
+   117 00000167 06                          push es
+   118                                  
+   119 00000168 31C0                        xor ax, ax
+   120 0000016A 8EC0                        mov es, ax
+   121                                  
+   122 0000016C FA                          cli
+   123 0000016D A1[0B00]                    mov ax, [oldtrapisr]
+   124 00000170 26A30400                    mov [es:1 * 4], ax
+   125 00000174 A1[0D00]                    mov ax, [oldtrapisr + 2]
+   126 00000177 26A30600                    mov [es:1 * 4 + 2], ax
+   127 0000017B A1[0700]                    mov ax, [oldkbisr]
+   128 0000017E 26A32400                    mov [es:9 * 4], ax
+   129 00000182 A1[0900]                    mov ax, [oldkbisr + 2]
+   130 00000185 26A32600                    mov [es:9 * 4 + 2], ax
+   131 00000189 FB                          sti
+   132                                  
+   133 0000018A 07                          pop es
+   134 0000018B 58                          pop ax
+   135                                  
+   136 0000018C C3                          ret
+   137                                  
+   138                                  start:
+   139                                      ;-----hook interrupt service routines-----
+   140 0000018D E897FF                      call hookISR
+   141                                  
+   142                                      ;-----read file path-----
+   143 00000190 31C9                        xor cx, cx
+   144 00000192 8A0E8000                    mov cl, [80h]
+   145 00000196 80F901                      cmp cl, 1
+   146 00000199 0F8CAC00                    jl no_filepath
+   147                                  
+   148                                      ; remove trailing spaces
+   149 0000019D FEC9                        dec cl
+   150 0000019F BE8200                      mov si, 82h
+   151 000001A2 BF[0F00]                    mov di, filepath
+   152 000001A5 F3A4                        rep movsb
+   153                                  
+   154                                      ;-----resizing memory for debugger-----
+   155 000001A7 BB[F902]                    mov bx, terminate
+   156 000001AA 83C314                      add bx, 20
+   157 000001AD C1EB04                      shr bx, 4
+   158                                  
+   159 000001B0 8CC8                        mov ax, cs
+   160 000001B2 8EC0                        mov es, ax
+   161 000001B4 B44A                        mov ah, 4Ah
+   162 000001B6 CD21                        int 21h
+   163                                  
+   164                                      ;-----allocating memory for child process-----
+   165 000001B8 B80048                      mov ax, 4800h
+   166 000001BB BB0010                      mov bx, 1000h
+   167 000001BE CD21                        int 21h
+   168 000001C0 0F828900                    jc no_memory_available
+   169 000001C4 A3[8F00]                    mov [childseg], ax
    170                                  
-   171                                  terminate:
-   172 00000175 B8004C                      mov ax, 4C00h
-   173 00000178 CD21                        int 21h
+   171                                      ;-----creating psp for child process-----
+   172 000001C7 B426                        mov ah, 26h
+   173 000001C9 8B16[8F00]                  mov dx, [childseg]
+   174 000001CD CD21                        int 21h
+   175                                  
+   176                                      ;-----open .COM file-----
+   177 000001CF B8003D                      mov ax, 3D00h
+   178 000001D2 BA[0F00]                    mov dx, filepath
+   179 000001D5 CD21                        int 21h
+   180 000001D7 7272                        jc file_not_found
+   181                                  
+   182                                      ;-----load .COM file into memory-----
+   183 000001D9 1E                          push ds
+   184                                  
+   185 000001DA 89C3                        mov bx, ax
+   186 000001DC B43F                        mov ah, 3Fh
+   187 000001DE B9FFFF                      mov cx, 0FFFFh
+   188 000001E1 BA0001                      mov dx, 100h
+   189 000001E4 8E1E[8F00]                  mov ds, [childseg]
+   190 000001E8 CD21                        int 21h
+   191 000001EA 7263                        jc file_not_read
+   192                                  
+   193 000001EC 1F                          pop ds
+   194                                  
+   195                                      ;-----close .COM file-----
+   196 000001ED B43E                        mov ah, 3Eh
+   197 000001EF CD21                        int 21h
+   198                                  
+   199                                      ;-----set up child process environment-----
+   200 000001F1 A1[8F00]                    mov ax, [childseg]
+   201 000001F4 8EC0                        mov es, ax
+   202                                  
+   203                                      ; setting return address for child process
+   204 000001F6 26C7060A00[3A02]            mov word [es:0Ah], return_to_parent
+   205 000001FD 268C0E0C00                  mov word [es:0Ch], cs
+   206 00000202 26C7060E00[3A02]            mov word [es:0Eh], return_to_parent
+   207 00000209 268C0E1000                  mov word [es:10h], cs
+   208 0000020E 26C7061200[3A02]            mov word [es:12h], return_to_parent
+   209 00000215 268C0E1400                  mov word [es:14h], cs
+   210                                      ; setting parent psp
+   211 0000021A 268C0E1600                  mov word [es:16h], cs
+   212                                  
+   213                                      ; setting child process stack
+   214 0000021F 8C16[0300]                  mov [orig_ss], ss
+   215 00000223 8926[0500]                  mov [orig_sp], sp
+   216                                  
+   217 00000227 8ED0                        mov ss, ax
+   218 00000229 BCFEFF                      mov sp, 0FFFEh
+   219                                  
+   220 0000022C 9C                          pushf
+   221 0000022D 58                          pop ax
+   222 0000022E 0D0001                      or ax, 0100h
+   223 00000231 50                          push ax
+   224 00000232 FF36[8F00]                  push word [childseg]
+   225 00000236 680001                      push word 0100h
+   226                                  
+   227 00000239 CF                          iret
+   228                                  
+   229                                      ;-----come back to original process-----
+   230                                  return_to_parent:
+   231 0000023A E829FF                      call unhookISR
+   232                                  
+   233 0000023D 8B26[0500]                  mov sp, [orig_sp]
+   234 00000241 A1[0300]                    mov ax, [orig_ss]
+   235 00000244 8ED0                        mov ss, ax
+   236                                  
+   237 00000246 E9B000                      jmp terminate
+   238                                  
+   239                                  
+   240                                  ;-----error handling-----
+   241                                  no_filepath:
+   242 00000249 EBFE                        jmp no_filepath
+   243                                  
+   244                                  file_not_found:
+   245 0000024B EBFE                        jmp file_not_found
+   246                                  
+   247                                  no_memory_available:
+   248 0000024D EBFE                        jmp no_memory_available
+   249                                  
+   250                                  file_not_read:
+   251 0000024F EBFE                        jmp file_not_read
+   252                                  
+   253                                  
+   254                                  
+   255 00000251 55                      printstr: push bp
+   256 00000252 89E5                    mov bp, sp
+   257 00000254 06                      push es
+   258 00000255 50                      push ax
+   259 00000256 53                      push bx
+   260 00000257 51                      push cx
+   261 00000258 52                      push dx
+   262 00000259 56                      push si
+   263 0000025A 57                      push di
+   264 0000025B B800B8                  mov ax, 0xb800
+   265 0000025E 8EC0                    mov es, ax ; point es to video base
+   266 00000260 BF5000                  mov di, 80 ; load di with columns per row
+   267 00000263 8B460A                  mov ax, [bp+10] ; load ax with row number
+   268 00000266 F7E7                    mul di ; multiply with columns per row
+   269 00000268 89C7                    mov di, ax ; save result in di
+   270 0000026A 037E08                  add di, [bp+8] ; add column number
+   271 0000026D D1E7                    shl di, 1 ; turn into byte count
+   272 0000026F 8B7606                  mov si, [bp+6] ; string to be printed
+   273 00000272 8B4E04                  mov cx, [bp+4] ; length of string
+   274 00000275 B407                    mov ah, 0x07 ; normal attribute is fixed
+   275 00000277 8A04                    nextchar: mov al, [si] ; load next char of string
+   276 00000279 268905                  mov [es:di], ax ; show next char on screen
+   277 0000027C 83C702                  add di, 2 ; move to next screen location
+   278 0000027F 83C601                  add si, 1 ; move to next char
+   279 00000282 E2F3                    loop nextchar ; repeat the operation cx times
+   280 00000284 5F                      pop di
+   281 00000285 5E                      pop si
+   282 00000286 5A                      pop dx
+   283 00000287 59                      pop cx
+   284 00000288 5B                      pop bx
+   285 00000289 58                      pop ax
+   286 0000028A 07                      pop es
+   287 0000028B 5D                      pop bp
+   288 0000028C C20800                  ret 8
+   289                                  
+   290                                  
+   291 0000028F 55                      printnum: push bp
+   292 00000290 89E5                    mov bp, sp
+   293 00000292 06                      push es
+   294 00000293 50                      push ax
+   295 00000294 53                      push bx
+   296 00000295 51                      push cx
+   297 00000296 52                      push dx
+   298 00000297 57                      push di
+   299 00000298 BF5000                  mov di, 80 ; load di with columns per row
+   300 0000029B 8B4608                  mov ax, [bp+8] ; load ax with row number
+   301 0000029E F7E7                    mul di ; multiply with columns per row
+   302 000002A0 89C7                    mov di, ax ; save result in di
+   303 000002A2 037E06                  add di, [bp+6] ; add column number
+   304 000002A5 D1E7                    shl di, 1 ; turn into byte count
+   305 000002A7 83C708                  add di, 8 ; to end of number location
+   306 000002AA B800B8                  mov ax, 0xb800
+   307 000002AD 8EC0                    mov es, ax ; point es to video base
+   308 000002AF 8B4604                  mov ax, [bp+4] ; load number in ax
+   309 000002B2 BB1000                  mov bx, 16 ; use base 16 for division
+   310 000002B5 B90400                  mov cx, 4 ; initialize count of digits
+   311 000002B8 BA0000                  nextdigit: mov dx, 0 ; zero upper half of dividend
+   312 000002BB F7F3                    div bx ; divide by 10
+   313 000002BD 80C230                  add dl, 0x30 ; convert digit into ascii value
+   314 000002C0 80FA39                  cmp dl, 0x39 ; is the digit an alphabet
+   315 000002C3 7603                    jbe skipalpha ; no, skip addition
+   316 000002C5 80C207                  add dl, 7 ; yes, make in alphabet code
+   317 000002C8 B607                    skipalpha: mov dh, 0x07 ; attach normal attribute
+   318 000002CA 268915                  mov [es:di], dx ; print char on screen
+   319 000002CD 83EF02                  sub di, 2 ; to previous screen location
+   320 000002D0 E2E6                    loop nextdigit ; if no divide it again
+   321 000002D2 5F                      pop di
+   322 000002D3 5A                      pop dx
+   323 000002D4 59                      pop cx
+   324 000002D5 5B                      pop bx
+   325 000002D6 58                      pop ax
+   326 000002D7 07                      pop es
+   327 000002D8 5D                      pop bp
+   328 000002D9 C20600                  ret 6
+   329                                  
+   330                                  
+   331 000002DC 06                      clrscrn: push es
+   332 000002DD 50                      push ax
+   333 000002DE 57                      push di
+   334 000002DF B800B8                  mov ax, 0xb800
+   335 000002E2 8EC0                    mov es, ax ; point es to video base
+   336 000002E4 BF0000                  mov di, 0 ; point di to top left column
+   337 000002E7 26C7052007              nextloc: mov word [es:di], 0x0720 ; clear next char on screen
+   338 000002EC 83C702                  add di, 2 ; move to next screen location
+   339 000002EF 81FFA00F                cmp di, 4000 ; has the whole screen cleared
+   340 000002F3 75F2                    jne nextloc ; if no clear next position
+   341 000002F5 5F                      pop di
+   342 000002F6 58                      pop ax
+   343 000002F7 07                      pop es
+   344 000002F8 C3                      ret
+   345                                  
+   346                                  
+   347                                  
+   348                                  terminate:
+   349 000002F9 B8004C                      mov ax, 4C00h
+   350 000002FC CD21                        int 21h
