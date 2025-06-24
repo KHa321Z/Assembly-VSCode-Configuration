@@ -25,20 +25,36 @@ packet:         times ARRAY_SIZE db 0
 packettail:     dw packet
 inprocessing:   db 0
 
-availpacks:     db 'q', '?', 's', 'c', 'g', 'Z', 'z', 'm', 'X'
-addresspacks:   dw gdb_support, gdb_why, gdb_debugger, gdb_debugger, gdb_send_registers, gdb_set_breakpoint, gdb_remove_breakpoint, gdb_read_memory, gdb_write_memory
+availpacks:     db 'q', '?', 's', 'c', 'p', 'g', 'Z', 'z', 'm', 'X'
+addresspacks:   dw gdb_unknown, gdb_why, gdb_debugger, gdb_debugger, gdb_extract_register, gdb_send_registers, gdb_set_breakpoint, gdb_remove_breakpoint, gdb_read_memory, gdb_write_memory
 packslength:    dw ($ - addresspacks) / 2
 
 supportPack:    db 'qSupported', 0
 contPack:       db 'vCont?', 0
 mustreplyPack:  db 'vMustReplyEmpty', 0
+multiPack:      db 'Hg0', 0
+featurePack:    db 'qXfer', 0
+threadPack:     db 'qfThreadInfo', 0
+endthreadPack:  db 'qsThreadInfo', 0
+attachedPack:   db 'qAttached', 0
+currthreadPack: db 'Hc-1', 0
+querycurrPack:  db 'qC', 0
 
 nothing:        db '$#00', 0
 okreply:        db '$OK#9a', 0
 errorreply:     db '$E01#xx', 0
 stopreply:      db '$S05#b8', 0
-contreply:      db '$vCont;c;s#00', 0
+supportreply:   db '$#00';'$PacketSize=512;qXfer:features:read+#a3', 0
+singletreply:   db '$m1#9e', 0
+endlistreply:   db '$l#6c', 0
+childkillreply: db '$0#30', 0
+currthreply:    db '$QC1#c5', 0
 
+targetxml:      db '$l<!DOCTYPE feature SYSTEM "gdb-target.dtd"><feature name="org.gnu.gdb.i386.core"><flags id="i386_eflags" size="4"><field name="CF" start="0" end="0"/><field name="" start="1" end="1"/><field name="PF" start="2" end="2"/><field name="AF" start="4" end="4"/><field name="ZF" start="6" end="6"/><field name="SF" start="7" end="7"/><field name="TF" start="8" end="8"/><field name="IF" start="9" end="9"/><field name="DF" start="10" end="10"/><field name="OF" start="11" end="11"/><field name="NT" start="14" end="14"/><field name="RF" start="16" end="16"/><field name="VM" start="17" end="17"/><field name="AC" start="18" end="18"/><field name="VIF" start="19" end="19"/><field name="VIP" start="20" end="20"/><field name="ID" start="21" end="21"/></flags><reg name="eax" bitsize="32" type="int32"/><reg name="ecx" bitsize="32" type="int32"/><reg name="edx" bitsize="32" type="int32"/><reg name="ebx" bitsize="32" type="int32"/><reg name="esp" bitsize="32" type="data_ptr"/><reg name="ebp" bitsize="32" type="data_ptr"/><reg name="esi" bitsize="32" type="int32"/><reg name="edi" bitsize="32" type="int32"/><reg name="eip" bitsize="32" type="code_ptr"/><reg name="eflags" bitsize="32" type="i386_eflags"/><reg name="cs" bitsize="32" type="int32"/><reg name="ss" bitsize="32" t#31', '$mype="int32"/><reg name="ds" bitsize="32" type="int32"/><reg name="es" bitsize="32" type="int32"/><reg name="fs" bitsize="32" type="int32"/><reg name="gs" bitsize="32" type="int32"/><reg name="st0" bitsize="80" type="i387_ext"/><reg name="st1" bitsize="80" type="i387_ext"/><reg name="st2" bitsize="80" type="i387_ext"/><reg name="st3" bitsize="80" type="i387_ext"/><reg name="st4" bitsize="80" type="i387_ext"/><reg name="st5" bitsize="80" type="i387_ext"/><reg name="st6" bitsize="80" type="i387_ext"/><reg name="st7" bitsize="80" type="i387_ext"/><reg name="fctrl" bitsize="32" type="int" group="float"/><reg name="fstat" bitsize="32" type="int" group="float"/><reg name="ftag" bitsize="32" type="int" group="float"/><reg name="fiseg" bitsize="32" type="int" group="float"/><reg name="fioff" bitsize="32" type="int" group="float"/><reg name="foseg" bitsize="32" type="int" group="float"/><reg name="fooff" bitsize="32" type="int" group="float"/><reg name="fop" bitsize="32" type="int" group="float"/></feature>#21'
+                ;'$l<?xml version="1.0"?><!DOCTYPE target SYSTEM "gdb-target.dtd"><target><feature name="my.custom.i8086"><reg name="ax" bitsize="16"/><reg name="cx" bitsize="16"/><reg name="dx" bitsize="16"/><reg name="bx" bitsize="16"/><reg name="sp" bitsize="16"/><reg name="bp" bitsize="16"/><reg name="si" bitsize="16"/><reg name="di" bitsize="16"/><reg name="ip" bitsize="16"/><reg name="flags" bitsize="16"/><reg name="cs" bitsize="16"/><reg name="ss" bitsize="16"/><reg name="ds" bitsize="16"/><reg name="es" bitsize="16"/></feature></target>#f6'
+                ;'$l<?xml version="1.0"?><!DOCTYPE target SYSTEM "gdb-target.dtd"><target><feature name="org.gnu.gdb.i8086.core"><flags id="i8086_flags" size="2"><field name="CF" start="0" end="0"/><field name="PF" start="2" end="2"/><field name="AF" start="4" end="4"/><field name="ZF" start="6" end="6"/><field name="SF" start="7" end="7"/><field name="TF" start="8" end="8"/><field name="IF" start="9" end="9"/><field name="DF" start="10" end="10"/><field name="OF" start="11" end="11"/><field name="NT" start="14" end="14"/></flags><reg name="ax" bitsize="16" type="int16"/><reg name="bx" bitsize="16" type="int16"/><reg name="cx" bitsize="16" type="int16"/><reg name="dx" bitsize="16" type="int16"/><reg name="si" bitsize="16" type="int16"/><reg name="di" bitsize="16" type="int16"/><reg name="bp" bitsize="16" type="data_ptr"/><reg name="sp" bitsize="16" type="data_ptr"/><reg name="ip" bitsize="16" type="code_ptr"/><reg name="flags" bitsize="16" type="i8086_flags"/><reg name="cs" bitsize="16" type="int16"/><reg name="ds" bitsize="16" type="int16"/><reg name="es" bitsize="16" type="int16"/><reg name="ss" bitsize="16" type="int16"/></feature></target>#f1'
+                ;'$l<?xml version="1.0"?><!DOCTYPE target SYSTEM "gdb-target.dtd"><target><architecture>i8086</architecture><feature name="org.gnu.gdb.i8086.cpu"><reg name="ax" bitsize="16"/><reg name="bx" bitsize="16"/><reg name="cx" bitsize="16"/><reg name="dx" bitsize="16"/><reg name="si" bitsize="16"/><reg name="di" bitsize="16"/><reg name="bp" bitsize="16"/><reg name="sp" bitsize="16"/><reg name="ip" bitsize="16"/><reg name="flags" bitsize="16"/><reg name="cs" bitsize="16"/><reg name="ds" bitsize="16"/><reg name="es" bitsize="16"/><reg name="ss" bitsize="16"/></feature></target>#40', 0
+targetxml_len   dw $ - targetxml
 
 opcodesize:     dw 0
 opcodes:        times ARRAY_SIZE db 0
@@ -476,11 +492,39 @@ packet_processor:
 
     push word contPack
     call check_packet
-    jz gdb_support
+    jz gdb_unknown
 
     push word mustreplyPack
     call check_packet
-    jz gdb_support
+    jz gdb_unknown
+
+    push word multiPack
+    call check_packet
+    jz gdb_ok
+
+    push word featurePack
+    call check_packet
+    jz gdb_target_description
+
+    push word threadPack
+    call check_packet
+    jz gdb_single_thread
+
+    push word endthreadPack
+    call check_packet
+    jz gdb_end_list
+
+    push word attachedPack
+    call check_packet
+    jz gdb_child_process
+
+    push word currthreadPack
+    call check_packet
+    jz gdb_ok
+
+    push word querycurrPack
+    call check_packet
+    jz gdb_curr_thread
 
     ; find respective packet type
     cld
@@ -509,7 +553,44 @@ gdb_unknown:
     jmp terminate_packet_processing
 
 gdb_support:
-    push word nothing
+    push word supportreply
+    call send_reply
+
+    jmp terminate_packet_processing
+
+gdb_ok:
+    push word okreply
+    call send_reply
+
+    jmp terminate_packet_processing
+
+gdb_target_description:
+    ; fix dynamic length for bigger chunks
+    push word targetxml
+    call send_reply
+
+    jmp terminate_packet_processing
+
+gdb_single_thread:
+    push word singletreply
+    call send_reply
+
+    jmp terminate_packet_processing
+
+gdb_end_list:
+    push word endlistreply
+    call send_reply
+
+    jmp terminate_packet_processing
+
+gdb_child_process:
+    push word childkillreply
+    call send_reply
+
+    jmp terminate_packet_processing
+
+gdb_curr_thread:
+    push word currthreply
     call send_reply
 
     jmp terminate_packet_processing
@@ -523,6 +604,39 @@ gdb_why:
 gdb_debugger:
     ; toggle flag beforehand so that it remains on and is handle by debugger isrs
     xor byte [inprocessing], 1
+
+    jmp terminate_packet_processing
+
+gdb_extract_register:
+    push word packet + 2
+    push word 1
+    call extract_hex
+    pop di
+
+    shl di, 1
+    xor ax, ax
+    xor bx, bx
+
+    push word '$'
+    call send_byte
+
+    mov al, [regs + di]
+    push ax
+    call send_hex
+    pop bx
+
+    mov al, [regs + di + 1]
+    push ax
+    call send_hex
+    pop ax
+
+    add al, bl 
+
+    push word '#'
+    call send_byte
+    push ax
+    call send_hex
+    pop ax
 
     jmp terminate_packet_processing
 
@@ -596,20 +710,20 @@ remove_breakpoint_error:
 
 gdb_read_memory:
     mov al, '#'
-    mov di, packet + 7
+    mov di, packet + 11
     mov cx, 5
 
     cld
     repne scasb
-    sub di, packet + 8
+    sub di, packet + 12
     mov cx, di
 
-    push word packet + 2
+    push word packet + 6
     push word 4
     call extract_hex
     pop di
 
-    push word packet + 7
+    push word packet + 11
     push cx
     call extract_hex
     pop cx
@@ -617,6 +731,9 @@ gdb_read_memory:
     xor ax, ax
     xor dx, dx
     mov es, [childseg]
+
+    push word '$'
+    call send_byte
 
 read_memory_loop:
     mov al, [es:di]
