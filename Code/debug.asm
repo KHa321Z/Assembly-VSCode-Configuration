@@ -11,7 +11,6 @@
 orig_sp:        dw 0
 oldtrapisr:     dd 0
 oldbrkisr:      dd 0
-; oldkbisr:   dd 0
 oldcomisr:      dd 0
 oldretisr:      dd 0
 filepath:       times 128 db 0
@@ -33,7 +32,6 @@ supportPack:    db 'qSupported', 0
 contPack:       db 'vCont?', 0
 mustreplyPack:  db 'vMustReplyEmpty', 0
 multiPack:      db 'Hg0', 0
-featurePack:    db 'qXfer', 0
 threadPack:     db 'qfThreadInfo', 0
 endthreadPack:  db 'qsThreadInfo', 0
 attachedPack:   db 'qAttached', 0
@@ -44,17 +42,10 @@ nothing:        db '$#00', 0
 okreply:        db '$OK#9a', 0
 errorreply:     db '$E01#xx', 0
 stopreply:      db '$S05#b8', 0
-supportreply:   db '$#00';'$PacketSize=512;qXfer:features:read+#a3', 0
 singletreply:   db '$m1#9e', 0
 endlistreply:   db '$l#6c', 0
 childkillreply: db '$0#30', 0
 currthreply:    db '$QC1#c5', 0
-
-targetxml:      db '$l<!DOCTYPE feature SYSTEM "gdb-target.dtd"><feature name="org.gnu.gdb.i386.core"><flags id="i386_eflags" size="4"><field name="CF" start="0" end="0"/><field name="" start="1" end="1"/><field name="PF" start="2" end="2"/><field name="AF" start="4" end="4"/><field name="ZF" start="6" end="6"/><field name="SF" start="7" end="7"/><field name="TF" start="8" end="8"/><field name="IF" start="9" end="9"/><field name="DF" start="10" end="10"/><field name="OF" start="11" end="11"/><field name="NT" start="14" end="14"/><field name="RF" start="16" end="16"/><field name="VM" start="17" end="17"/><field name="AC" start="18" end="18"/><field name="VIF" start="19" end="19"/><field name="VIP" start="20" end="20"/><field name="ID" start="21" end="21"/></flags><reg name="eax" bitsize="32" type="int32"/><reg name="ecx" bitsize="32" type="int32"/><reg name="edx" bitsize="32" type="int32"/><reg name="ebx" bitsize="32" type="int32"/><reg name="esp" bitsize="32" type="data_ptr"/><reg name="ebp" bitsize="32" type="data_ptr"/><reg name="esi" bitsize="32" type="int32"/><reg name="edi" bitsize="32" type="int32"/><reg name="eip" bitsize="32" type="code_ptr"/><reg name="eflags" bitsize="32" type="i386_eflags"/><reg name="cs" bitsize="32" type="int32"/><reg name="ss" bitsize="32" t#31', '$mype="int32"/><reg name="ds" bitsize="32" type="int32"/><reg name="es" bitsize="32" type="int32"/><reg name="fs" bitsize="32" type="int32"/><reg name="gs" bitsize="32" type="int32"/><reg name="st0" bitsize="80" type="i387_ext"/><reg name="st1" bitsize="80" type="i387_ext"/><reg name="st2" bitsize="80" type="i387_ext"/><reg name="st3" bitsize="80" type="i387_ext"/><reg name="st4" bitsize="80" type="i387_ext"/><reg name="st5" bitsize="80" type="i387_ext"/><reg name="st6" bitsize="80" type="i387_ext"/><reg name="st7" bitsize="80" type="i387_ext"/><reg name="fctrl" bitsize="32" type="int" group="float"/><reg name="fstat" bitsize="32" type="int" group="float"/><reg name="ftag" bitsize="32" type="int" group="float"/><reg name="fiseg" bitsize="32" type="int" group="float"/><reg name="fioff" bitsize="32" type="int" group="float"/><reg name="foseg" bitsize="32" type="int" group="float"/><reg name="fooff" bitsize="32" type="int" group="float"/><reg name="fop" bitsize="32" type="int" group="float"/></feature>#21'
-                ;'$l<?xml version="1.0"?><!DOCTYPE target SYSTEM "gdb-target.dtd"><target><feature name="my.custom.i8086"><reg name="ax" bitsize="16"/><reg name="cx" bitsize="16"/><reg name="dx" bitsize="16"/><reg name="bx" bitsize="16"/><reg name="sp" bitsize="16"/><reg name="bp" bitsize="16"/><reg name="si" bitsize="16"/><reg name="di" bitsize="16"/><reg name="ip" bitsize="16"/><reg name="flags" bitsize="16"/><reg name="cs" bitsize="16"/><reg name="ss" bitsize="16"/><reg name="ds" bitsize="16"/><reg name="es" bitsize="16"/></feature></target>#f6'
-                ;'$l<?xml version="1.0"?><!DOCTYPE target SYSTEM "gdb-target.dtd"><target><feature name="org.gnu.gdb.i8086.core"><flags id="i8086_flags" size="2"><field name="CF" start="0" end="0"/><field name="PF" start="2" end="2"/><field name="AF" start="4" end="4"/><field name="ZF" start="6" end="6"/><field name="SF" start="7" end="7"/><field name="TF" start="8" end="8"/><field name="IF" start="9" end="9"/><field name="DF" start="10" end="10"/><field name="OF" start="11" end="11"/><field name="NT" start="14" end="14"/></flags><reg name="ax" bitsize="16" type="int16"/><reg name="bx" bitsize="16" type="int16"/><reg name="cx" bitsize="16" type="int16"/><reg name="dx" bitsize="16" type="int16"/><reg name="si" bitsize="16" type="int16"/><reg name="di" bitsize="16" type="int16"/><reg name="bp" bitsize="16" type="data_ptr"/><reg name="sp" bitsize="16" type="data_ptr"/><reg name="ip" bitsize="16" type="code_ptr"/><reg name="flags" bitsize="16" type="i8086_flags"/><reg name="cs" bitsize="16" type="int16"/><reg name="ds" bitsize="16" type="int16"/><reg name="es" bitsize="16" type="int16"/><reg name="ss" bitsize="16" type="int16"/></feature></target>#f1'
-                ;'$l<?xml version="1.0"?><!DOCTYPE target SYSTEM "gdb-target.dtd"><target><architecture>i8086</architecture><feature name="org.gnu.gdb.i8086.cpu"><reg name="ax" bitsize="16"/><reg name="bx" bitsize="16"/><reg name="cx" bitsize="16"/><reg name="dx" bitsize="16"/><reg name="si" bitsize="16"/><reg name="di" bitsize="16"/><reg name="bp" bitsize="16"/><reg name="sp" bitsize="16"/><reg name="ip" bitsize="16"/><reg name="flags" bitsize="16"/><reg name="cs" bitsize="16"/><reg name="ds" bitsize="16"/><reg name="es" bitsize="16"/><reg name="ss" bitsize="16"/></feature></target>#40', 0
-targetxml_len   dw $ - targetxml
 
 opcodesize:     dw 0
 opcodes:        times ARRAY_SIZE db 0
@@ -194,21 +185,6 @@ done_remove:
     pop bp
     ret 2
 
-
-; kbisr:
-;     push ax
-
-;     in al, 60h
-;     test al, 80h
-;     jnz skipflag
-;     add byte [cs:flag], al
-
-; skipflag:
-;     mov al, 20h
-;     out 20h, al
-
-;     pop ax
-;     iret
 
 trapisr:
     push bp
@@ -466,6 +442,12 @@ storepacket:
     ; setting packet processing flag
     mov byte [inprocessing], 1
 
+    push word 20
+    push word 0
+    push word packet
+    push word 20
+    call printstr
+
     ; process the received packet
     call packet_processor
 
@@ -488,7 +470,7 @@ packet_processor:
     ; check general packets
     push word supportPack
     call check_packet
-    jz gdb_support
+    jz gdb_unknown
 
     push word contPack
     call check_packet
@@ -501,10 +483,6 @@ packet_processor:
     push word multiPack
     call check_packet
     jz gdb_ok
-
-    push word featurePack
-    call check_packet
-    jz gdb_target_description
 
     push word threadPack
     call check_packet
@@ -552,21 +530,8 @@ gdb_unknown:
 
     jmp terminate_packet_processing
 
-gdb_support:
-    push word supportreply
-    call send_reply
-
-    jmp terminate_packet_processing
-
 gdb_ok:
     push word okreply
-    call send_reply
-
-    jmp terminate_packet_processing
-
-gdb_target_description:
-    ; fix dynamic length for bigger chunks
-    push word targetxml
     call send_reply
 
     jmp terminate_packet_processing
@@ -814,12 +779,6 @@ hookISR:
     mov [oldbrkisr], ax
     mov ax, [es:0x3 * 4 + 2]
     mov [oldbrkisr + 2], ax
-    ; keyboard interrupt
-    ; (int 9h)
-    ; mov ax, [es:9h * 4]
-    ; mov [oldkbisr], ax
-    ; mov ax, [es:9h * 4 + 2]
-    ; mov [oldkbisr + 2], ax
     ; COM port interrupt
     ; (int 0Ch)
     mov ax, [es:0xC * 4]
@@ -843,9 +802,6 @@ hookISR:
     ; breakpoint trap
     mov word [es:0x3 * 4], brkisr
     mov [es:0x3 * 4 + 2], cs
-    ; keyboard interrupt
-    ; mov word [es:9h * 4], kbisr
-    ; mov [es:9h * 4 + 2], cs
     ; COM port interrupt
     mov word [es:0xC * 4], comisr
     mov [es:0xC * 4 + 2], cs
@@ -900,12 +856,6 @@ unhookISR:
     mov [es:0x3 * 4], ax
     mov ax, [oldbrkisr + 2]
     mov [es:0x3 * 4 + 2], ax
-    ; keyboard interrupt
-    ; (int 9h)
-    ; mov ax, [oldkbisr]
-    ; mov [es:9h * 4], ax
-    ; mov ax, [oldkbisr + 2]
-    ; mov [es:9h * 4 + 2], ax
     ; COM port interrupt
     ; (int 0Ch)
     mov ax, [oldcomisr]
@@ -1053,8 +1003,14 @@ file_not_read:
 
 
 extract_hex:
-    ; [bp + 6] - address to extract / return value
-    ; [bp + 4] - length
+    ; Parameters:
+    ; [bp + 6] - address to extract
+    ; [bp + 4] - length (max 8 for 32 bit address)
+
+    ; Returns:
+    ; [bp + 6] - higher word of 32 bit address
+    ; [bp + 4] - lower word of 32 bit address
+
     push bp
     mov bp, sp
 
@@ -1104,10 +1060,51 @@ hex_digit:
     pop bp
     ret
 
+
+; converts a 32 bit physical address to a logical address in segment:offset format
+convert_physical_to_logical:
+    ; Parameters:
+    ; [bp + 6] - higher word of 32 bit physical address
+    ; [bp + 4] - lower word of 32 bit physical address
+
+    ; Returns:
+    ; [bp + 6] - segment of logical address
+    ; [bp + 4] - offset of logical address
+
+    push bp
+    mov bp, sp
+
+    push ax
+    push dx
+
+    mov ax, [bp + 6]
+    mov dx, [bp + 8]
+    mov cx, 4
+
+    ; mask to 20 bits
+    and dx, 0x000F
+
+segment_shift_loop:
+    shr dx, 1
+    rcr ax, 1
+    loop segment_shift_loop
+
+    mov [bp + 6], ax ; segment
+    and [bp + 4], 0xFFFF ; keep only lower 4 bits of offset
+
+    pop dx
+    pop ax
+
+    pop bp
+    ret
+
+
 ; doesn't handle substrings
 ; returns answer in zero flag
 check_packet:
-    ; [bp + 4] - packet to check
+    ; Parameters:
+    ; [bp + 4] - packet to check against
+
     push bp
     mov bp, sp
 
