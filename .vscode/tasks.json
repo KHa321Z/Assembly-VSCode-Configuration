@@ -34,6 +34,20 @@
             "problemMatcher": [],
             "detail": "Task to assemble and link an assembly file using NASM"
         },
+        { 
+            "type": "shell",
+            "label": "Create ELF File",
+            "command": "${workspaceFolder}\\convert_to_elf.bat",
+            "args": [
+                "${file}",
+                "${fileDirname}",
+                "${fileBasenameNoExtension}",
+                "${workspaceFolder}\\Tools\\nasm"
+            ],
+            "group": "build",
+            "problemMatcher": [],
+            "detail": "Replace org 0x0100 with bits 16 and create ELF file using batch script"
+        }, 
         {
             "type": "shell",
             "label": "Assemble and Run",

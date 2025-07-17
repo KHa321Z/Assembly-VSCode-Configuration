@@ -1,5 +1,9 @@
 ; CHECK ALL PACKET INPUTS
 ; CHECK ALL PACKET OUTPUTS
+; implement custom stack for parent process so that parent does not hog child process stack
+; gdb_kill needs to be implemented
+; check why exit not sent
+
 [org 0x0100]
 
     jmp start
@@ -15,6 +19,7 @@ oldcomisr:      dd 0
 oldretisr:      dd 0
 filepath:       times 128 db 0
 childseg:       dw 0
+firstpause:     db 0
 
 names:          db 'FL =CS =IP =BP =AX =BX =CX =DX =SI =DI =DS =ES ='
 
@@ -24,8 +29,8 @@ packet:         times ARRAY_SIZE db 0
 packettail:     dw packet
 inprocessing:   db 0
 
-availpacks:     db 'q', '?', 's', 'c', 'p', 'g', 'Z', 'z', 'm', 'X'
-addresspacks:   dw gdb_unknown, gdb_why, gdb_debugger, gdb_debugger, gdb_extract_register, gdb_send_registers, gdb_set_breakpoint, gdb_remove_breakpoint, gdb_read_memory, gdb_write_memory
+availpacks:     db 'q', '?', 'k', 's', 'c', 'p', 'g', 'Z', 'z', 'm', 'X'
+addresspacks:   dw gdb_unknown, gdb_why, gdb_kill, gdb_debugger, gdb_debugger, gdb_extract_register, gdb_send_registers, gdb_set_breakpoint, gdb_remove_breakpoint, gdb_read_memory, gdb_write_memory
 packslength:    dw ($ - addresspacks) / 2
 
 supportPack:    db 'qSupported', 0
@@ -46,6 +51,7 @@ singletreply:   db '$m1#9e', 0
 endlistreply:   db '$l#6c', 0
 childkillreply: db '$0#30', 0
 currthreply:    db '$QC1#c5', 0
+exitreply:      db '$W00#57', 0
 
 opcodesize:     dw 0
 opcodes:        times ARRAY_SIZE db 0
@@ -198,9 +204,24 @@ trapisr:
     push cs
     pop ds
 
-    call printdebug
+    cmp byte [firstpause], 0
+    jz skip_send_gdb_packet
+
+    push word stopreply
+    call send_reply
+
+    push word 22
+    push word 0
+    push word [firstpause]
+    call printnum
+
+skip_send_gdb_packet:
+    ; call printdebug
     call save_registers
+
     call wait_packet
+
+    mov byte [firstpause], 1
 
     pop es
     pop ds
@@ -230,7 +251,8 @@ brkisr:
     ; mov [es:di], al
 
     call printdebug
-    call save_registers
+    ; call save_registers
+    
     call wait_packet
 
     pop es
@@ -325,7 +347,11 @@ testline:
     ret 2
 
 send_hex:
-    ; [bp + 4] - value to send / return value (checksum)
+    ; Parameters:
+    ; [bp + 4] - value to send
+    ; Returns:
+    ; [bp + 4] - checksum value
+
     push bp
     mov bp, sp
     push ax
@@ -566,6 +592,10 @@ gdb_why:
 
     jmp terminate_packet_processing
 
+gdb_kill:
+    ; need to implement this
+    jmp terminate_packet_processing
+
 gdb_debugger:
     ; toggle flag beforehand so that it remains on and is handle by debugger isrs
     xor byte [inprocessing], 1
@@ -577,6 +607,7 @@ gdb_extract_register:
     push word 1
     call extract_hex
     pop di
+    pop ax
 
     shl di, 1
     xor ax, ax
@@ -635,11 +666,15 @@ nextreg:
 
     jmp terminate_packet_processing
 
+; fix this function call to accept seg:off pair
 gdb_set_breakpoint:
     push word packet + 4
     push word 4
     call extract_hex
+    pop ax
+    pop bx
 
+    push ax
     call push_opcode
     jc set_breakpoint_error
 
@@ -654,11 +689,15 @@ set_breakpoint_error:
 
     jmp terminate_packet_processing
 
+; this as well
 gdb_remove_breakpoint:
     push word packet + 4
     push word 4
     call extract_hex
+    pop ax
+    pop bx
 
+    push ax
     call remove_opcode
     jc remove_breakpoint_error
 
@@ -674,28 +713,50 @@ remove_breakpoint_error:
     jmp terminate_packet_processing
 
 gdb_read_memory:
-    mov al, '#'
-    mov di, packet + 11
-    mov cx, 5
+    ; extract length of address in packet
+    mov al, ','
+    mov di, packet + 2
+    mov cx, 10
 
     cld
     repne scasb
-    sub di, packet + 12
+
+    ; length in bx
+    mov bx, di
+    sub bx, packet + 3
+
+    ; extract length of number of bytes to read
+    mov al, '#'
+    mov cx, 10
+
+    repne scasb
+
+    ; length in cx
+    sub di, packet + 4
+    sub di, bx
     mov cx, di
 
-    push word packet + 6
-    push word 4
+    ; extract and convert 32 bit address to segment:offset
+    push word packet + 2
+    push bx
     call extract_hex
+    call convert_physical_to_logical
     pop di
+    pop es
 
-    push word packet + 11
+    ; extract number of bytes to read
+    mov ax, packet + 3
+    add ax, bx
+    
+    push ax
     push cx
     call extract_hex
     pop cx
+    pop ax
 
     xor ax, ax
     xor dx, dx
-    mov es, [childseg]
+    ; mov es, [childseg]        ; dunnno what to do with this
 
     push word '$'
     call send_byte
@@ -709,6 +770,15 @@ read_memory_loop:
     add dl, al
     inc di
 
+    ; handling segment wrap for large memory reads
+    cmp di, 0
+    jne no_wrap_in_memory
+
+    mov ax, es
+    add ax, 0x1000
+    mov es, ax
+
+no_wrap_in_memory:
     loop read_memory_loop
 
     push word '#'
@@ -719,43 +789,68 @@ read_memory_loop:
 
     jmp terminate_packet_processing
 
+; check this
 gdb_write_memory:
-    mov al, ':'
-    mov di, packet + 7
-    mov cx, 5
+    ; extract length of address in packet
+    mov al, ','
+    mov di, packet + 2
+    mov cx, 10
 
     cld
     repne scasb
+
+    ; length in bx
     mov bx, di
-    sub di, packet + 8
+    sub bx, packet + 3
+
+    ; extract length of number of bytes to write
+    mov al, ':'
+    mov cx, 10
+
+    repne scasb
+
+    ; length in cx and pointer to data in si
+    mov si, di
+    sub di, packet + 4
+    sub di, bx
     mov cx, di
 
+    ; extract and convert 32 bit address to segment:offset
     push word packet + 2
-    push word 4
+    push bx
     call extract_hex
+    call convert_physical_to_logical
     pop di
+    pop es
 
-    push word packet + 7
+    ; extract number of bytes to write
+    mov ax, packet + 3
+    add ax, bx
+
+    push ax
     push cx
     call extract_hex
     pop cx
+    pop ax
 
     xor ax, ax
     xor dx, dx
-    mov es, [childseg]
+    mov bx, si
+    ; mov es, [childseg]
 
 write_memory_loop:
     push bx
     push word 2
     call extract_hex
     pop ax
+    pop si
 
     stosb
     inc bx
 
     loop write_memory_loop
 
-    jmp terminate_packet_processing
+    jmp gdb_ok
 
 
 hookISR: 
@@ -984,6 +1079,14 @@ return_to_parent:
     mov ss, ax
     mov sp, [orig_sp]
 
+    ; send reply to gdb that child exitted
+    cmp byte [firstpause], 0
+    jz child_skipped
+
+    push word exitreply
+    call send_reply
+
+child_skipped:
     call unhookISR
 
     jmp terminate
@@ -1002,9 +1105,10 @@ file_not_read:
     jmp file_not_read
 
 
+; change extract_hex everywhere and use convertor to extract address if not value
 extract_hex:
     ; Parameters:
-    ; [bp + 6] - address to extract
+    ; [bp + 6] - address of value to extract
     ; [bp + 4] - length (max 8 for 32 bit address)
 
     ; Returns:
@@ -1020,7 +1124,9 @@ extract_hex:
 
     mov cx, [bp + 4]
     mov si, [bp + 6]
+
     mov word [bp + 6], 0
+    mov word [bp + 4], 0
 
 extract_next_hex:
     mov al, [si]
@@ -1032,9 +1138,19 @@ extract_next_hex:
     sub al, 0x27
 
 skip_extract_char:
-    shl word [bp + 6], 4
-    add [bp + 6], al
+    ; shift the 32 bit value left by 4 bits
+    shl word [bp + 6], 4        ; higher nibble is empty
+    rol word [bp + 4], 4        ; higher nibble that is to be shifted to bp+6 is now in lower nibble
 
+    mov ah, 0xF                 ; prepare mask
+    and ah, [bp + 4]            ; extract the higher nibble
+    and word [bp + 6], 0xFFF0   ; reset lower nibble of higher word
+    or [bp + 6], ah             ; pasted higher nibble to the higher word
+
+    and word [bp + 4], 0xFFF0   ; reset lower nibble of higher word
+    or [bp + 4], al             ; pasted extracted lower nibble to the lower word
+
+    inc si
     loop extract_next_hex
 
     pop si
@@ -1042,7 +1158,7 @@ skip_extract_char:
     pop ax
 
     pop bp
-    ret 2
+    ret
 
 
 convert_to_ascii:
@@ -1075,10 +1191,11 @@ convert_physical_to_logical:
     mov bp, sp
 
     push ax
+    push cx
     push dx
 
-    mov ax, [bp + 6]
-    mov dx, [bp + 8]
+    mov ax, [bp + 4]
+    mov dx, [bp + 6]
     mov cx, 4
 
     ; mask to 20 bits
@@ -1090,9 +1207,10 @@ segment_shift_loop:
     loop segment_shift_loop
 
     mov [bp + 6], ax ; segment
-    and [bp + 4], 0xFFFF ; keep only lower 4 bits of offset
+    and word [bp + 4], 0x000F ; keep only lower 4 bits of offset
 
     pop dx
+    pop cx
     pop ax
 
     pop bp

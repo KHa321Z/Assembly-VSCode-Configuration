@@ -2,16 +2,21 @@
     "version": "0.2.0", 
     "configurations": [
         {
-            "name": "Debug Assembly in DOSBox", 
-            "type": "cppdbg", // Dummy Debugger
+            "name": "16-bit DOS debug with GDB", 
+            "type": "cppdbg",
             "request": "launch", 
-            "program": "${workspaceFolder}\\${fileBasenameNoExtension}.COM", 
-            "preLaunchTask": "Assemble and Debug",
+            "program": "${workspaceFolder}\\Tools\\${fileBasenameNoExtension}.elf", 
+            "preLaunchTask": "Assemble and r", // add elf compilation task to it
             "cwd": "${workspaceFolder}",
-            "externalConsole": true, 
-            "stopAtEntry": false, 
-            "miDebuggerPath": "/usr/bin/gdb", // Dummy Path
-            "MIMode": "gdb" // Dummy Mode
+            "MIMode": "gdb", 
+            "miDebuggerPath": "gdb",
+            "setupCommands": [
+                { "text": "source ${workspaceFolder}\\Tools\\gdb_init.txt" }, 
+                { "text": "set tdesc filename ${workspaceFolder}\\Tools\\target.xml" }, 
+                { "text": "target remote localhost:1111" }
+            ],
+            "externalConsole": false, 
+            "stopAtEntry": false
         }
     ]
 }
