@@ -1,7 +1,9 @@
 ; CHECK ALL PACKET INPUTS
 ; CHECK ALL PACKET OUTPUTS
 ; implement custom stack for parent process so that parent does not hog child process stack
-; gdb_kill needs to be implemented
+; stop before starting execution of program
+; check if registers are initialized
+; breakpoint will take offset address while memory will take physical address
 ; check why exit not sent
 
 [org 0x0100]
@@ -43,6 +45,7 @@ attachedPack:   db 'qAttached', 0
 currthreadPack: db 'Hc-1', 0
 querycurrPack:  db 'qC', 0
 
+supportreply:   db '$PacketSize=512;swbreak+;kill+;vContSupported-#67', 0
 nothing:        db '$#00', 0
 okreply:        db '$OK#9a', 0
 errorreply:     db '$E01#xx', 0
@@ -53,10 +56,57 @@ childkillreply: db '$0#30', 0
 currthreply:    db '$QC1#c5', 0
 exitreply:      db '$W00#57', 0
 
-opcodesize:     dw 0
+reinstallbrk:   db 0
+tempbrkaddr:    dw 0
+opcodearrsize:  dw 0
 opcodes:        times ARRAY_SIZE db 0
 opcodespos:     times ARRAY_SIZE dw 0
 
+
+find_opcode:
+    ; Parameters:
+    ; [bp + 4] - address of breakpoint
+    ; Returns:
+    ; [bp + 4] - index in opcodes array
+    push bp
+    mov bp, sp
+    
+    push ax
+    push cx
+    push di
+    push es
+
+    push ds
+    pop es
+
+    mov ax, [bp + 4]
+    mov cx, [opcodearrsize]
+    mov di, opcodespos
+
+    jcxz missing_opcode
+
+    cld
+    repne scasw
+    jz found_opcode_addr
+
+missing_opcode:
+    mov word [bp + 4], 0xFFFF
+
+    jmp done_find
+
+found_opcode_addr:
+    sub di, opcodespos + 2
+    shr di, 1
+    mov [bp + 4], di
+
+done_find:
+    pop es
+    pop di
+    pop cx
+    pop ax
+
+    pop bp
+    ret
 
 push_opcode:
     ; [bp + 4] - address of breakpoint
@@ -73,7 +123,7 @@ push_opcode:
     pop es
 
     mov ax, [bp + 4]
-    mov cx, [opcodesize]
+    mov cx, [opcodearrsize]
     mov di, opcodespos
 
     jcxz skip_push_search
@@ -87,7 +137,7 @@ push_opcode:
 
 skip_push_search:
     mov si, ax
-    mov di, [opcodesize]
+    mov di, [opcodearrsize]
     mov es, [childseg]
 
     ; opcode replaced for breakpoint in child process
@@ -97,7 +147,7 @@ skip_push_search:
     mov [opcodes + di], al
     shl di, 1
     mov [opcodespos + di], si
-    inc word [opcodesize]
+    inc word [opcodearrsize]
 
     clc
     jmp done_push
@@ -129,27 +179,37 @@ remove_opcode:
     push ds
     pop es
 
-    mov ax, [bp + 4]
-    mov cx, [opcodesize]
-    mov di, opcodespos
+    push word [bp + 4]
+    call find_opcode
+    pop cx
 
-    jcxz remove_opcode_error
+    cmp cx, 0xFFFF
+    je remove_opcode_error
 
-    cld
-    repne scasw
-    jz found_opcode_address
+;     mov ax, [bp + 4]
+;     mov cx, [opcodearrsize]
+;     mov di, opcodespos
 
-    jmp remove_opcode_error
+;     jcxz remove_opcode_error
 
-found_opcode_address:
-    sub di, 2
-    mov si, [opcodesize]
-    sub si, cx
-    add si, opcodes - 1
+;     cld
+;     repne scasw
+;     jz found_opcode_address
+
+;     jmp remove_opcode_error
+
+; found_opcode_address:
+    ; sub di, 2
+    mov si, cx
+    add si, opcodes
+    ; add di, opcodespos
+    ; mov si, [opcodearrsize]
+    ; sub si, cx
+    ; add si, opcodes - 1
     mov es, [childseg]
 
-    push di
-    mov di, ax
+    ; push di
+    mov di, [bp + 4]
     cld
 
     ; opcode replaced for original
@@ -160,7 +220,17 @@ found_opcode_address:
     push ds
     pop es
 
+    ; setup di index for shifting addresses
+    mov di, cx
+    shl di, 1
+    add di, opcodespos
+    push di
+
     ; shift the opcodes array
+    mov ax, [opcodearrsize]
+    sub ax, cx
+    dec ax
+    mov cx, ax
     push cx
 
     mov di, si
@@ -174,7 +244,7 @@ found_opcode_address:
     add si, 2
     rep movsw
 
-    dec word [opcodesize]
+    dec word [opcodearrsize]
     clc
     jmp done_remove
 
@@ -200,27 +270,49 @@ trapisr:
     push ds
     push es
 
-    sti
     push cs
     pop ds
 
+    ; replace this if possible
     cmp byte [firstpause], 0
-    jz skip_send_gdb_packet
+    jz skip_send_stopreply
+
+    ; check if breakpoint is set in previous trap
+    ; if so skip waiting for packet and return after restoring
+    cmp byte [reinstallbrk], 1
+    jz restore_breakpoint
 
     push word stopreply
     call send_reply
 
-    push word 22
-    push word 0
-    push word [firstpause]
-    call printnum
-
-skip_send_gdb_packet:
-    ; call printdebug
+skip_send_stopreply:
     call save_registers
+    
+    ; wait for comisr to receive a packet
+    sti
 
-    call wait_packet
+wait_packet:
+    cmp byte [inprocessing], 0
+    je wait_packet
 
+    cmp byte [packet + 1], 's'
+    je packet_step
+
+    cmp byte [packet + 1], 'c'
+    je packet_continue
+
+    jmp wait_packet
+
+packet_step:
+    or word [bp + 6], 0x0100
+
+    jmp wait_packet_done
+
+packet_continue:
+    and word [bp + 6], 0xFEFF
+
+wait_packet_done:
+    mov byte [inprocessing], 0
     mov byte [firstpause], 1
 
     pop es
@@ -230,6 +322,17 @@ skip_send_gdb_packet:
     pop bp
     iret
 
+restore_breakpoint:
+    mov al, 0xCC
+    mov di, [tempbrkaddr]
+    mov es, [childseg]
+    mov byte [reinstallbrk], 0
+
+    cld
+    stosb
+
+    jmp wait_packet
+
 brkisr:
     push bp
     mov bp, sp
@@ -238,22 +341,58 @@ brkisr:
     push ds
     push es
 
-    sti
     push cs
     pop ds
 
-    ; mov ax, [bp + 4]
-    ; mov es, ax
-    ; dec word [bp + 2]
-    ; mov di, [bp + 2]
-    ; mov word [opcodepos], di
-    ; mov al, [opcode]
-    ; mov [es:di], al
+    ; adjust ip to re-execute the instruction after the breakpoint
+    dec word [bp + 2]
 
-    call printdebug
-    ; call save_registers
+    ; restore the opcode so that the program can continue
+    ; ----- ideally check if es contains the same segment as childseg and fix ip if not
+    mov es, [bp + 4]
+    mov di, [bp + 2]
     
-    call wait_packet
+    ; set flags to indicate re-installation of breakpoint
+    mov byte [reinstallbrk], 1
+    mov word [tempbrkaddr], di
+
+    ; find the opcode in the opcodes array
+    push di
+    call find_opcode
+    pop si
+
+    add si, opcodes
+
+    ; restore the original opcode
+    lodsb
+    stosb
+
+    ; send stop reply
+    push word stopreply
+    call send_reply
+    ; save register values
+    call save_registers
+    
+    ; wait for comisr to receive a packet
+    sti
+
+trap_wait:
+    cmp byte [inprocessing], 0
+    je trap_wait
+
+    cmp byte [packet + 1], 's'
+    je force_step
+
+    cmp byte [packet + 1], 'c'
+    je force_step
+
+    jmp trap_wait
+
+    ; if trap flag is set, program will always cause a trap
+    ; so restore the breakpoint and continue. no need for resetting flags
+force_step:
+    ; initialize trap flag for breakpoint restoration
+    or word [bp + 6], 0x0100
 
     pop es
     pop ds
@@ -295,31 +434,6 @@ save_registers:
     mov [regs + 26], ss ; SS
 
     pop ax
-    ret
-
-wait_packet:
-    cmp byte [inprocessing], 0
-    je wait_packet
-
-    cmp byte [packet + 1], 's'
-    je packet_step
-
-    cmp byte [packet + 1], 'c'
-    je packet_continue
-
-    jmp wait_packet
-
-packet_step:
-    or word [bp + 6], 0100h
-
-    jmp wait_packet_done
-
-packet_continue:
-    and word [bp + 6], 0FEFFh
-
-wait_packet_done:
-    mov byte [inprocessing], 0
-
     ret
 
 
@@ -496,7 +610,7 @@ packet_processor:
     ; check general packets
     push word supportPack
     call check_packet
-    jz gdb_unknown
+    jz gdb_support
 
     push word contPack
     call check_packet
@@ -550,6 +664,12 @@ terminate_packet_processing:
 
     ret
 
+gdb_support:
+    push word supportreply
+    call send_reply
+
+    jmp terminate_packet_processing
+
 gdb_unknown:
     push word nothing
     call send_reply
@@ -593,8 +713,12 @@ gdb_why:
     jmp terminate_packet_processing
 
 gdb_kill:
-    ; need to implement this
-    jmp terminate_packet_processing
+    ; no need to send reply
+    mov byte [firstpause], 0
+
+    ; terminate the program in child's context
+    mov ax, 0x4c00
+    int 0x21
 
 gdb_debugger:
     ; toggle flag beforehand so that it remains on and is handle by debugger isrs
@@ -668,11 +792,24 @@ nextreg:
 
 ; fix this function call to accept seg:off pair
 gdb_set_breakpoint:
+    mov al, ','
+    mov di, packet + 4
+    mov cx, 10
+
+    cld 
+    repne scasb
+
+    sub di, packet + 5
+
     push word packet + 4
-    push word 4
+    push di
     call extract_hex
+    call convert_physical_to_logical
+    pop di
     pop ax
-    pop bx
+
+    shl ax, 4
+    add ax, di
 
     push ax
     call push_opcode
@@ -691,11 +828,24 @@ set_breakpoint_error:
 
 ; this as well
 gdb_remove_breakpoint:
+    mov al, ','
+    mov di, packet + 4
+    mov cx, 10
+
+    cld 
+    repne scasb
+
+    sub di, packet + 5
+
     push word packet + 4
-    push word 4
+    push di
     call extract_hex
+    call convert_physical_to_logical
+    pop di
     pop ax
-    pop bx
+
+    shl ax, 4
+    add ax, di
 
     push ax
     call remove_opcode
@@ -990,22 +1140,22 @@ unhookISR:
 start:
     ;-----initialize COM port for debugging-----
     mov ah, 0
-    mov al, 0E3h
+    mov al, 0xE3
     xor dx, dx
-    int 14h
+    int 0x14
 
     ;-----hook interrupt service routines-----
     call hookISR
 
     ;-----read file path-----
     xor cx, cx
-    mov cl, [80h]
+    mov cl, [0x80]
     cmp cl, 1
     jl no_filepath
 
     ; remove trailing spaces
     dec cl
-    mov si, 82h
+    mov si, 0x82
     mov di, filepath
     cld
     rep movsb
@@ -1017,57 +1167,57 @@ start:
 
     mov ax, cs
     mov es, ax
-    mov ah, 4Ah
-    int 21h
+    mov ah, 0x4A
+    int 0x21
 
     ;-----allocating memory for child process-----
-    mov ax, 4800h
-    mov bx, 1000h
-    int 21h
+    mov ax, 0x4800
+    mov bx, 0x1000
+    int 0x21
     jc no_memory_available
     mov [childseg], ax
 
     ;-----creating psp for child process-----
-    mov ah, 55h
+    mov ah, 0x55
     mov dx, [childseg]
     mov si, 0
-    int 21h
+    int 0x21
 
     ;-----open .COM file-----
-    mov ax, 3D00h
+    mov ax, 0x3D00
     mov dx, filepath
-    int 21h
+    int 0x21
     jc file_not_found
 
     ;-----load .COM file into memory-----
     push ds
 
     mov bx, ax
-    mov ah, 3Fh
-    mov cx, 0FFFFh
-    mov dx, 100h
+    mov ah, 0x3F
+    mov cx, 0xFFFF
+    mov dx, 0x0100
     mov ds, [childseg]
-    int 21h
+    int 0x21
     jc file_not_read
 
     pop ds
 
     ;-----close .COM file-----
-    mov ah, 3Eh
-    int 21h
+    mov ah, 0x3E
+    int 0x21
 
     ;-----set up child process stack-----
     mov [orig_sp], sp
 
     mov ss, [childseg]
-    mov sp, 0FFFEh
+    mov sp, 0xFFFE
 
     pushf
     pop ax
-    or ax, 0100h
+    or ax, 0x0100
     push ax
     push word [childseg]
-    push word 0100h
+    push word 0x0100
 
     iret
 

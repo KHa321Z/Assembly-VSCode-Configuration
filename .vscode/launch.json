@@ -2,21 +2,34 @@
     "version": "0.2.0", 
     "configurations": [
         {
-            "name": "16-bit DOS debug with GDB", 
+            "name": "Debug 16-bit ASM", 
             "type": "cppdbg",
             "request": "launch", 
-            "program": "${workspaceFolder}\\Tools\\${fileBasenameNoExtension}.elf", 
-            "preLaunchTask": "Assemble and r", // add elf compilation task to it
+            "program": "${workspaceFolder}\\${relativeFileDirname}\\${fileBasenameNoExtension}.elf", 
             "cwd": "${workspaceFolder}",
+            "sourceFileMap": {
+                "/": "${workspaceFolder}\\${relativeFileDirname}"
+            }, 
+            "preLaunchTask": "Assemble and Debug", 
             "MIMode": "gdb", 
             "miDebuggerPath": "gdb",
+            "miDebuggerServerAddress": "localhost:1111", 
             "setupCommands": [
-                { "text": "source ${workspaceFolder}\\Tools\\gdb_init.txt" }, 
-                { "text": "set tdesc filename ${workspaceFolder}\\Tools\\target.xml" }, 
-                { "text": "target remote localhost:1111" }
+                { "text": "cd ${workspaceFolder}\\${relativeFileDirname}" }, 
+                { "text": "file ${fileBasenameNoExtension}.elf" }, 
+                { "text": "cd ${workspaceFolder}" }, 
+                { "text": "directory ${fileDirname}" }, 
+                { "text": "source Tools\\gdb_init.txt" }, 
+                { "text": "set tdesc filename Tools\\target.xml" }, 
+                { "text": "break start" }
             ],
-            "externalConsole": false, 
-            "stopAtEntry": false
+            "externalConsole": true, 
+            "stopAtEntry": true, 
+            "logging": {
+                "engineLogging": true, 
+                "trace": true, 
+                "traceResponse": true
+            },
         }
     ]
 }

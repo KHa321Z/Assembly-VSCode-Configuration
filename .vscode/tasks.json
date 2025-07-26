@@ -4,14 +4,14 @@
         {
             "type": "shell", 
             "label": "Set Conf File", 
-            "command": "${workspaceFolder}\\configure.bat", 
+            "command": "${workspaceFolder}\\Tools\\configure.bat", 
             "args": [
                 "'${workspaceFolder}'"
             ],
             "group": "none", 
             "problemMatcher": [],
             "detail": "Task to set the configuration file for DOSBox"
-        },  
+        }, 
         {
             "type": "shell",
             "label": "Assemble Only",
@@ -36,18 +36,18 @@
         },
         { 
             "type": "shell",
-            "label": "Create ELF File",
-            "command": "${workspaceFolder}\\convert_to_elf.bat",
+            "label": "Build ELF File",
+            "command": "${workspaceFolder}\\Tools\\convert_to_elf.bat",
             "args": [
-                "${file}",
-                "${fileDirname}",
-                "${fileBasenameNoExtension}",
-                "${workspaceFolder}\\Tools\\nasm"
+                "'${file}'",
+                "'${fileDirname}'",
+                "'${fileBasenameNoExtension}'",
+                "'${workspaceFolder}\\Tools\\nasm'"
             ],
             "group": "build",
             "problemMatcher": [],
             "detail": "Replace org 0x0100 with bits 16 and create ELF file using batch script"
-        }, 
+        },
         {
             "type": "shell",
             "label": "Assemble and Run",
@@ -55,6 +55,7 @@
             "args": [
                 "-c", "\\${relativeFileDirname}\\${fileBasenameNoExtension}.COM"
             ],
+            "dependsOrder": "sequence",
             "dependsOn": [
                 "Set Conf File",
                 "Assemble and Link"
@@ -66,23 +67,40 @@
             "problemMatcher": [],
             "detail": "Task to assemble and run the assembled and linked program"
         },
+        // {
+        //     "type": "shell",
+        //     "label": "Assemble and Debug",
+        //     "command": "${workspaceFolder}\\DOSBoxPortable\\DOSBoxPortable.exe",
+        //     "args": [
+        //         "-c", "\\Tools\\afd \\${relativeFileDirname}\\${fileBasenameNoExtension}.COM"
+        //     ],
+        //     "dependsOn": [
+        //         "Set Conf File",
+        //         "Assemble and Link"
+        //     ],
+        //     "group": {
+        //         "kind": "test",
+        //         "isDefault": true
+        //     },
+        //     "problemMatcher": [],
+        //     "detail": "Task to assemble and debug the assembled and linked program using afd"
+        // }
         {
             "type": "shell",
             "label": "Assemble and Debug",
             "command": "${workspaceFolder}\\DOSBoxPortable\\DOSBoxPortable.exe",
             "args": [
-                "-c", "\\Tools\\afd \\${relativeFileDirname}\\${fileBasenameNoExtension}.COM"
-            ],
+                "-c", "\\Code\\debug.COM \\${relativeFileDirname}\\${fileBasenameNoExtension}.COM"
+            ], 
+            "dependsOrder": "sequence",
             "dependsOn": [
                 "Set Conf File",
-                "Assemble and Link"
-            ],
-            "group": {
-                "kind": "test",
-                "isDefault": true
-            },
+                "Assemble and Link", 
+                "Build ELF File"
+            ], 
+            "group": "build", 
             "problemMatcher": [],
-            "detail": "Task to assemble and debug the assembled and linked program using afd"
+            "detail": "Task to assemble and debug the assembled and linked program using debug.COM"
         }
     ]
 }
