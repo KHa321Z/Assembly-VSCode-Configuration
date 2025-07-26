@@ -1,10 +1,10 @@
 ; CHECK ALL PACKET INPUTS
 ; CHECK ALL PACKET OUTPUTS
 ; implement custom stack for parent process so that parent does not hog child process stack
-; stop before starting execution of program
+; stop before starting execution of program (2) make a dummy breakpoint before program loads
 ; check if registers are initialized
-; breakpoint will take offset address while memory will take physical address
-; check why exit not sent
+; check why exit not sent (2) debugger does not exit after program exits
+; check why breakpoint and step are still malfunctioning
 
 [org 0x0100]
 

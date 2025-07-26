@@ -8,7 +8,7 @@
             "program": "${workspaceFolder}\\${relativeFileDirname}\\${fileBasenameNoExtension}.elf", 
             "cwd": "${workspaceFolder}",
             "sourceFileMap": {
-                "/": "${workspaceFolder}\\${relativeFileDirname}"
+                "${workspaceFolder}\\${relativeFileDirname}": "${workspaceFolder}\\${relativeFileDirname}"
             }, 
             "preLaunchTask": "Assemble and Debug", 
             "MIMode": "gdb", 
@@ -21,7 +21,7 @@
                 { "text": "directory ${fileDirname}" }, 
                 { "text": "source Tools\\gdb_init.txt" }, 
                 { "text": "set tdesc filename Tools\\target.xml" }, 
-                { "text": "break start" }
+                // { "text": "break Code/coden.asm:9" }
             ],
             "externalConsole": true, 
             "stopAtEntry": true, 
