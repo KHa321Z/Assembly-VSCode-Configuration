@@ -67,24 +67,24 @@
             "problemMatcher": [],
             "detail": "Task to assemble and run the assembled and linked program"
         },
-        // {
-        //     "type": "shell",
-        //     "label": "Assemble and Debug",
-        //     "command": "${workspaceFolder}\\DOSBoxPortable\\DOSBoxPortable.exe",
-        //     "args": [
-        //         "-c", "\\Tools\\afd \\${relativeFileDirname}\\${fileBasenameNoExtension}.COM"
-        //     ],
-        //     "dependsOn": [
-        //         "Set Conf File",
-        //         "Assemble and Link"
-        //     ],
-        //     "group": {
-        //         "kind": "test",
-        //         "isDefault": true
-        //     },
-        //     "problemMatcher": [],
-        //     "detail": "Task to assemble and debug the assembled and linked program using afd"
-        // }
+        {
+            "type": "shell",
+            "label": "Debug with AFD",
+            "command": "${workspaceFolder}\\DOSBoxPortable\\DOSBoxPortable.exe",
+            "args": [
+                "-c", "\\Tools\\afd \\${relativeFileDirname}\\${fileBasenameNoExtension}.COM"
+            ],
+            "dependsOn": [
+                "Set Conf File",
+                "Assemble and Link"
+            ],
+            "group": {
+                "kind": "test",
+                "isDefault": true
+            },
+            "problemMatcher": [],
+            "detail": "Task to assemble and debug the assembled and linked program using afd"
+        }, 
         {
             "type": "shell",
             "label": "Assemble and Debug",

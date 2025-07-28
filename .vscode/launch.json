@@ -19,9 +19,9 @@
                 { "text": "file ${fileBasenameNoExtension}.elf" }, 
                 { "text": "cd ${workspaceFolder}" }, 
                 { "text": "directory ${fileDirname}" }, 
-                { "text": "source Tools\\gdb_init.txt" }, 
                 { "text": "set tdesc filename Tools\\target.xml" }, 
-                // { "text": "break Code/coden.asm:9" }
+                { "text": "set architecture i8086" }, 
+                { "text": "set disassembly-flavor intel" }
             ],
             "externalConsole": true, 
             "stopAtEntry": true, 

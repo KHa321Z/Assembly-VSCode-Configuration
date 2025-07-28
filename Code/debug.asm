@@ -1,267 +1,278 @@
-; CHECK ALL PACKET INPUTS
-; CHECK ALL PACKET OUTPUTS
-; implement custom stack for parent process so that parent does not hog child process stack
-; stop before starting execution of program (2) make a dummy breakpoint before program loads
-; check if registers are initialized
-; check why exit not sent (2) debugger does not exit after program exits
-; check why breakpoint and step are still malfunctioning
-
 [org 0x0100]
 
     jmp start
 
+;-----macro definitions-----
 %define ARRAY_SIZE 512
 %define MCR 0x03FC
 %define IER 0x03F9
 
-orig_sp:        dw 0
-oldtrapisr:     dd 0
-oldbrkisr:      dd 0
-oldcomisr:      dd 0
-oldretisr:      dd 0
-filepath:       times 128 db 0
-childseg:       dw 0
-firstpause:     db 0
+start:
+    ;-----initialize COM port for debugging-----
+    mov ah, 0
+    mov al, 0xE3
+    xor dx, dx
+    int 0x14
 
-names:          db 'FL =CS =IP =BP =AX =BX =CX =DX =SI =DI =DS =ES ='
+    ;-----hook interrupt service routines-----
+    call hookISR
 
-regs:           times 14 dw 0
-chksum:         db 0
-packet:         times ARRAY_SIZE db 0
-packettail:     dw packet
-inprocessing:   db 0
+    ;-----read file path-----
+    xor cx, cx
+    mov cl, [0x80]
+    cmp cl, 1
+    jl no_filepath
 
-availpacks:     db 'q', '?', 'k', 's', 'c', 'p', 'g', 'Z', 'z', 'm', 'X'
-addresspacks:   dw gdb_unknown, gdb_why, gdb_kill, gdb_debugger, gdb_debugger, gdb_extract_register, gdb_send_registers, gdb_set_breakpoint, gdb_remove_breakpoint, gdb_read_memory, gdb_write_memory
-packslength:    dw ($ - addresspacks) / 2
+    ; remove trailing spaces
+    dec cl
+    mov si, 0x82
+    mov di, filepath
+    cld
+    rep movsb
 
-supportPack:    db 'qSupported', 0
-contPack:       db 'vCont?', 0
-mustreplyPack:  db 'vMustReplyEmpty', 0
-multiPack:      db 'Hg0', 0
-threadPack:     db 'qfThreadInfo', 0
-endthreadPack:  db 'qsThreadInfo', 0
-attachedPack:   db 'qAttached', 0
-currthreadPack: db 'Hc-1', 0
-querycurrPack:  db 'qC', 0
+    ;-----resizing memory for debugger-----
+    mov bx, parentstack
+    add bx, 1024 + 15
+    shr bx, 4
 
-supportreply:   db '$PacketSize=512;swbreak+;kill+;vContSupported-#67', 0
-nothing:        db '$#00', 0
-okreply:        db '$OK#9a', 0
-errorreply:     db '$E01#xx', 0
-stopreply:      db '$S05#b8', 0
-singletreply:   db '$m1#9e', 0
-endlistreply:   db '$l#6c', 0
-childkillreply: db '$0#30', 0
-currthreply:    db '$QC1#c5', 0
-exitreply:      db '$W00#57', 0
+    mov ax, cs
+    mov es, ax
+    mov ah, 0x4A
+    int 0x21
 
-reinstallbrk:   db 0
-tempbrkaddr:    dw 0
-opcodearrsize:  dw 0
-opcodes:        times ARRAY_SIZE db 0
-opcodespos:     times ARRAY_SIZE dw 0
+    ;-----allocating memory for child process-----
+    mov ax, 0x4800
+    mov bx, 0x1000
+    int 0x21
+    jc no_memory_available
+    mov [childseg], ax
 
+    ;-----creating psp for child process-----
+    mov ah, 0x55
+    mov dx, [childseg]
+    mov si, 0
+    int 0x21
 
-find_opcode:
-    ; Parameters:
-    ; [bp + 4] - address of breakpoint
-    ; Returns:
-    ; [bp + 4] - index in opcodes array
-    push bp
-    mov bp, sp
-    
+    ;-----open .COM file-----
+    mov ax, 0x3D00
+    mov dx, filepath
+    int 0x21
+    jc file_not_found
+
+    ;-----load .COM file into memory-----
+    push ds
+
+    mov bx, ax
+    mov ah, 0x3F
+    mov cx, 0xFFFF
+    mov dx, 0x0100
+    mov ds, [childseg]
+    int 0x21
+    jc file_not_read
+
+    pop ds
+
+    ;-----close .COM file-----
+    mov ah, 0x3E
+    int 0x21
+
+    ;-----initialize registers-----
+    mov [orig_sp], sp
+    mov sp, 0xFFFE
+
+    mov ax, [childseg]
+    mov ds, ax
+    mov ss, ax
+    mov es, ax
+
+    pushf
     push ax
-    push cx
-    push di
+    push word 0x0100
+
+wait_for_continue:
+    ; wait till first continue packet arrives
+    cmp byte [cs:startprogram], 1
+    jne wait_for_continue
+
+    ; reset as program is continuing (allegedly)
+    mov byte [cs:inprocessing], 0
+
+    iret
+
+    ;-----come back to original process-----
+return_to_parent:
+    ; reset parent's registers
+    mov ax, cs
+    mov ds, ax
+    mov ss, ax
+    mov es, ax
+    mov sp, [orig_sp]
+
+    ; send reply to gdb that child exitted
+    cmp byte [startprogram], 0
+    jz child_skipped
+
+    push word exitreply
+    call send_reply
+
+child_skipped:
+    call unhookISR
+
+    mov ax, 0x4C00
+    int 0x21
+
+
+;-----error handling-----
+no_filepath:
+    jmp no_filepath
+
+file_not_found:
+    jmp file_not_found
+
+no_memory_available:
+    jmp no_memory_available
+
+file_not_read:
+    jmp file_not_read
+
+
+;-------------------------ISR functions-------------------------
+
+hookISR: 
+    push ax
     push es
 
-    push ds
+    xor ax, ax
+    mov es, ax
+
+    ; saving original ISRs
+
+    ; single step trap
+    ; (int 1h)
+    mov ax, [es:0x1 * 4]
+    mov [oldtrapisr], ax
+    mov ax, [es:0x1 * 4 + 2]
+    mov [oldtrapisr + 2], ax
+    ; breakpoint trap
+    ; (int 3h)
+    mov ax, [es:0x3 * 4]
+    mov [oldbrkisr], ax
+    mov ax, [es:0x3 * 4 + 2]
+    mov [oldbrkisr + 2], ax
+    ; COM port interrupt
+    ; (int 0Ch)
+    mov ax, [es:0xC * 4]
+    mov [oldcomisr], ax
+    mov ax, [es:0xC * 4 + 2]
+    mov [oldcomisr + 2], ax
+    ; return to parent process interrupt
+    ; (int 22h)
+    mov ax, [es:0x22 * 4]
+    mov [oldretisr], ax
+    mov ax, [es:0x22 * 4 + 2]
+    mov [oldretisr + 2], ax
+
+    ; hooking ISRs
+
+    cli
+
+    ; single step trap
+    mov word [es:0x1 * 4], trapisr
+    mov [es:0x1 * 4 + 2], cs
+    ; breakpoint trap
+    mov word [es:0x3 * 4], brkisr
+    mov [es:0x3 * 4 + 2], cs
+    ; COM port interrupt
+    mov word [es:0xC * 4], comisr
+    mov [es:0xC * 4 + 2], cs
+    ; return to parent process interrupt
+    mov word [es:0x22 * 4], return_to_parent
+    mov [es:0x22 * 4 + 2], cs
+
+    ; enabling interrupts
+
+    ; enable OUT2
+    mov dx, MCR
+    in al, dx
+    or al, 8 ; enable bit 3 (OUT2)
+    out dx, al
+    ; enable IER
+    mov dx, IER
+    in al, dx
+    or al, 1
+    out dx, al
+    ; enable PIC 
+    in al, 0x21
+    and al, 0xEF
+    out 0x21, al
+
+    sti
+
     pop es
-
-    mov ax, [bp + 4]
-    mov cx, [opcodearrsize]
-    mov di, opcodespos
-
-    jcxz missing_opcode
-
-    cld
-    repne scasw
-    jz found_opcode_addr
-
-missing_opcode:
-    mov word [bp + 4], 0xFFFF
-
-    jmp done_find
-
-found_opcode_addr:
-    sub di, opcodespos + 2
-    shr di, 1
-    mov [bp + 4], di
-
-done_find:
-    pop es
-    pop di
-    pop cx
     pop ax
 
-    pop bp
     ret
 
-push_opcode:
-    ; [bp + 4] - address of breakpoint
-    push bp
-    mov bp, sp
-
+unhookISR:
     push ax
-    push cx
-    push si
-    push di
     push es
 
-    push ds
+    xor ax, ax
+    mov es, ax
+
+    ; restoring original ISRs
+
+    cli
+
+    ; single step trap
+    ; (int 1h)
+    mov ax, [oldtrapisr]
+    mov [es:0x1 * 4], ax
+    mov ax, [oldtrapisr + 2]
+    mov [es:0x1 * 4 + 2], ax
+    ; breakpoint trap
+    ; (int 3h)
+    mov ax, [oldbrkisr]
+    mov [es:0x3 * 4], ax
+    mov ax, [oldbrkisr + 2]
+    mov [es:0x3 * 4 + 2], ax
+    ; COM port interrupt
+    ; (int 0Ch)
+    mov ax, [oldcomisr]
+    mov [es:0xC * 4], ax
+    mov ax, [oldcomisr + 2]
+    mov [es:0xC * 4 + 2], ax
+    ; return to parent process interrupt
+    ; (int 22h)
+    mov ax, [oldretisr]
+    mov [es:0x22 * 4], ax
+    mov ax, [oldretisr + 2]
+    mov [es:0x22 * 4 + 2], ax
+
+    ; disabling interrupts
+
+    ; disable OUT2
+    mov dx, MCR
+    in al, dx
+    and al, 0xF7 ; disable bit 3 (OUT2)
+    out dx, al
+    ; disable IER
+    mov dx, IER
+    xor al, al
+    out dx, al
+    ; disable PIC 
+    in al, 0x21
+    or al, 0x10
+    out 0x21, al
+
+    sti
+
     pop es
-
-    mov ax, [bp + 4]
-    mov cx, [opcodearrsize]
-    mov di, opcodespos
-
-    jcxz skip_push_search
-
-    cmp cx, 256
-    jae push_opcode_error
-
-    cld
-    repne scasw
-    jz push_opcode_error
-
-skip_push_search:
-    mov si, ax
-    mov di, [opcodearrsize]
-    mov es, [childseg]
-
-    ; opcode replaced for breakpoint in child process
-    mov al, [es:si]
-    mov byte [es:si], 0CCh
-    ; opcode stored in array for reference
-    mov [opcodes + di], al
-    shl di, 1
-    mov [opcodespos + di], si
-    inc word [opcodearrsize]
-
-    clc
-    jmp done_push
-
-push_opcode_error:
-    stc
-
-done_push:
-    pop es
-    pop di
-    pop si
-    pop cx
     pop ax
 
-    pop bp
-    ret 2
+    ret
 
-remove_opcode:
-    ; [bp + 4] - address of breakpoint
-    push bp
-    mov bp, sp
-
-    push ax
-    push cx
-    push si
-    push di
-    push es
-
-    push ds
-    pop es
-
-    push word [bp + 4]
-    call find_opcode
-    pop cx
-
-    cmp cx, 0xFFFF
-    je remove_opcode_error
-
-;     mov ax, [bp + 4]
-;     mov cx, [opcodearrsize]
-;     mov di, opcodespos
-
-;     jcxz remove_opcode_error
-
-;     cld
-;     repne scasw
-;     jz found_opcode_address
-
-;     jmp remove_opcode_error
-
-; found_opcode_address:
-    ; sub di, 2
-    mov si, cx
-    add si, opcodes
-    ; add di, opcodespos
-    ; mov si, [opcodearrsize]
-    ; sub si, cx
-    ; add si, opcodes - 1
-    mov es, [childseg]
-
-    ; push di
-    mov di, [bp + 4]
-    cld
-
-    ; opcode replaced for original
-    lodsb
-    stosb
-
-    ; remove opcode and shift the array
-    push ds
-    pop es
-
-    ; setup di index for shifting addresses
-    mov di, cx
-    shl di, 1
-    add di, opcodespos
-    push di
-
-    ; shift the opcodes array
-    mov ax, [opcodearrsize]
-    sub ax, cx
-    dec ax
-    mov cx, ax
-    push cx
-
-    mov di, si
-    dec di
-    rep movsb
-    ; shift the address array
-    pop cx
-    pop di
-
-    mov si, di
-    add si, 2
-    rep movsw
-
-    dec word [opcodearrsize]
-    clc
-    jmp done_remove
-
-remove_opcode_error:
-    stc
-
-done_remove:
-    pop es
-    pop di
-    pop si
-    pop cx
-    pop ax
-
-    pop bp
-    ret 2
-
-
+; (int 0x1)
 trapisr:
     push bp
     mov bp, sp
@@ -273,19 +284,26 @@ trapisr:
     push cs
     pop ds
 
-    ; replace this if possible
-    cmp byte [firstpause], 0
-    jz skip_send_stopreply
-
-    ; check if breakpoint is set in previous trap
-    ; if so skip waiting for packet and return after restoring
+    ; check if breakpoint was set in previous instruction
     cmp byte [reinstallbrk], 1
-    jz restore_breakpoint
+    jne send_stop_response
 
+    mov al, 0xCC
+    mov di, [tempbrkaddr]
+    mov es, [childseg]
+    mov byte [reinstallbrk], 0
+
+    cld
+    stosb
+
+    ; if this is a force step for reinstalling breakpoint, skip waiting for packet
+    cmp byte [forcepause], 1
+    jz packet_continue
+
+send_stop_response:
     push word stopreply
     call send_reply
 
-skip_send_stopreply:
     call save_registers
     
     ; wait for comisr to receive a packet
@@ -313,7 +331,7 @@ packet_continue:
 
 wait_packet_done:
     mov byte [inprocessing], 0
-    mov byte [firstpause], 1
+    mov byte [forcepause], 0
 
     pop es
     pop ds
@@ -322,17 +340,7 @@ wait_packet_done:
     pop bp
     iret
 
-restore_breakpoint:
-    mov al, 0xCC
-    mov di, [tempbrkaddr]
-    mov es, [childseg]
-    mov byte [reinstallbrk], 0
-
-    cld
-    stosb
-
-    jmp wait_packet
-
+; (int 0x3)
 brkisr:
     push bp
     mov bp, sp
@@ -381,16 +389,20 @@ trap_wait:
     je trap_wait
 
     cmp byte [packet + 1], 's'
-    je force_step
+    je normal_step
 
     cmp byte [packet + 1], 'c'
     je force_step
 
     jmp trap_wait
 
-    ; if trap flag is set, program will always cause a trap
-    ; so restore the breakpoint and continue. no need for resetting flags
+    ; step in both cases. for continue set flag so that trapisr does not wait for another packet
 force_step:
+    mov byte [forcepause], 1
+
+normal_step:
+    ; clear the inprocessing flag and do not wait in wait_packet
+    mov byte [inprocessing], 0
     ; initialize trap flag for breakpoint restoration
     or word [bp + 6], 0x0100
 
@@ -401,129 +413,7 @@ force_step:
     pop bp
     iret
 
-save_registers:
-    push ax
-
-    mov ax, [bp - 2]
-    mov [regs + 0], ax  ; AX
-    mov ax, [bp - 8]
-    mov [regs + 2], ax  ; BX
-    mov ax, [bp - 4]
-    mov [regs + 4], ax  ; CX
-    mov ax, [bp - 6]
-    mov [regs + 6], ax  ; DX
-    mov ax, [bp - 14]
-    mov [regs + 8], ax  ; SI
-    mov ax, [bp - 16]
-    mov [regs + 10], ax ; DI
-    mov ax, [bp]
-    mov [regs + 12], ax ; BP
-    mov ax, [bp - 10]
-    sub ax, 8
-    mov [regs + 14], ax ; SP
-    mov ax, [bp + 2]
-    mov [regs + 16], ax ; IP
-    mov ax, [bp + 6]
-    mov [regs + 18], ax ; FLAGS
-    mov ax, [bp + 4]
-    mov [regs + 20], ax ; CS
-    mov ax, [bp - 18]
-    mov [regs + 22], ax ; DS
-    mov ax, [bp - 20]
-    mov [regs + 24], ax ; ES
-    mov [regs + 26], ss ; SS
-
-    pop ax
-    ret
-
-
-send_byte:
-    push bp
-    mov bp, sp
-    push ax
-    push dx
-
-testline:
-    mov ah, 3
-    xor dx, dx
-    int 0x14
-
-    and ah, 32
-    jz testline
-
-    mov al, [bp + 4]
-    mov dx, 0x3F8
-    out dx, al
-
-    pop dx
-    pop ax
-    pop bp
-    ret 2
-
-send_hex:
-    ; Parameters:
-    ; [bp + 4] - value to send
-    ; Returns:
-    ; [bp + 4] - checksum value
-
-    push bp
-    mov bp, sp
-    push ax
-    push dx
-
-    xor ax, ax
-    xor dx, dx
-
-    mov al, 0F0h
-    and al, [bp + 4]
-    shr al, 4
-
-    push ax
-    call convert_to_ascii
-    pop ax
-    add dl, al
-    push ax
-    call send_byte
-
-    mov ax, 0xF
-    and al, [bp + 4]
-    push ax
-    call convert_to_ascii
-    pop ax
-    add dl, al
-    push ax
-    call send_byte
-
-    mov [bp + 4], dl
-
-    pop dx
-    pop ax
-    pop bp
-    ret
-
-send_reply:
-    push bp
-    mov bp, sp
-    push ax
-    push si
-    
-    xor ax, ax
-    mov si, [bp + 4]
-
-replyloop:
-    mov al, [si]
-    push ax
-    call send_byte
-
-    inc si
-    cmp byte [si], 0
-    jnz replyloop
-
-    pop si
-    pop ax
-    pop bp
-    ret 2
-
+; (int 0xC)
 comisr:
     push bp
     mov bp, sp
@@ -582,12 +472,6 @@ storepacket:
     ; setting packet processing flag
     mov byte [inprocessing], 1
 
-    push word 20
-    push word 0
-    push word packet
-    push word 20
-    call printstr
-
     ; process the received packet
     call packet_processor
 
@@ -602,6 +486,7 @@ nodata:
     pop bp
     iret
 
+;-------------------------packet processing functions-------------------------
 packet_processor:
     mov al, [packet + 1]
     mov di, availpacks
@@ -714,13 +599,15 @@ gdb_why:
 
 gdb_kill:
     ; no need to send reply
-    mov byte [firstpause], 0
+    mov byte [startprogram], 0
 
     ; terminate the program in child's context
     mov ax, 0x4c00
     int 0x21
 
 gdb_debugger:
+    ; toggle flag to start the child program's execution
+    mov byte [startprogram], 1
     ; toggle flag beforehand so that it remains on and is handle by debugger isrs
     xor byte [inprocessing], 1
 
@@ -790,7 +677,7 @@ nextreg:
 
     jmp terminate_packet_processing
 
-; fix this function call to accept seg:off pair
+
 gdb_set_breakpoint:
     mov al, ','
     mov di, packet + 4
@@ -826,7 +713,7 @@ set_breakpoint_error:
 
     jmp terminate_packet_processing
 
-; this as well
+
 gdb_remove_breakpoint:
     mov al, ','
     mov di, packet + 4
@@ -1003,256 +890,381 @@ write_memory_loop:
     jmp gdb_ok
 
 
-hookISR: 
+
+;-------------------------breakpoint setting functions-------------------------
+
+; find the index of the opcode in the opcodes array
+find_opcode:
+    ; Parameters:
+    ; [bp + 4] - address of breakpoint
+    ; Returns:
+    ; [bp + 4] - index in opcodes array
+
+    push bp
+    mov bp, sp
+    
     push ax
+    push cx
+    push di
     push es
 
-    xor ax, ax
-    mov es, ax
-
-    ; saving original ISRs
-
-    ; single step trap
-    ; (int 1h)
-    mov ax, [es:0x1 * 4]
-    mov [oldtrapisr], ax
-    mov ax, [es:0x1 * 4 + 2]
-    mov [oldtrapisr + 2], ax
-    ; breakpoint trap
-    ; (int 3h)
-    mov ax, [es:0x3 * 4]
-    mov [oldbrkisr], ax
-    mov ax, [es:0x3 * 4 + 2]
-    mov [oldbrkisr + 2], ax
-    ; COM port interrupt
-    ; (int 0Ch)
-    mov ax, [es:0xC * 4]
-    mov [oldcomisr], ax
-    mov ax, [es:0xC * 4 + 2]
-    mov [oldcomisr + 2], ax
-    ; return to parent process interrupt
-    ; (int 22h)
-    mov ax, [es:0x22 * 4]
-    mov [oldretisr], ax
-    mov ax, [es:0x22 * 4 + 2]
-    mov [oldretisr + 2], ax
-
-    ; hooking ISRs
-
-    cli
-
-    ; single step trap
-    mov word [es:0x1 * 4], trapisr
-    mov [es:0x1 * 4 + 2], cs
-    ; breakpoint trap
-    mov word [es:0x3 * 4], brkisr
-    mov [es:0x3 * 4 + 2], cs
-    ; COM port interrupt
-    mov word [es:0xC * 4], comisr
-    mov [es:0xC * 4 + 2], cs
-    ; return to parent process interrupt
-    mov word [es:0x22 * 4], return_to_parent
-    mov [es:0x22 * 4 + 2], cs
-
-    ; enabling interrupts
-
-    ; enable OUT2
-    mov dx, MCR
-    in al, dx
-    or al, 8 ; enable bit 3 (OUT2)
-    out dx, al
-    ; enable IER
-    mov dx, IER
-    in al, dx
-    or al, 1
-    out dx, al
-    ; enable PIC 
-    in al, 0x21
-    and al, 0xEF
-    out 0x21, al
-
-    sti
-
+    push ds
     pop es
+
+    mov ax, [bp + 4]
+    mov cx, [opcodearrsize]
+    mov di, opcodespos
+
+    jcxz missing_opcode
+
+    cld
+    repne scasw
+    jz found_opcode_addr
+
+missing_opcode:
+    mov word [bp + 4], 0xFFFF
+
+    jmp done_find
+
+found_opcode_addr:
+    sub di, opcodespos + 2
+    shr di, 1
+    mov [bp + 4], di
+
+done_find:
+    pop es
+    pop di
+    pop cx
     pop ax
 
+    pop bp
     ret
 
-unhookISR:
+
+; push an opcode for a breakpoint in the opcodes array
+; and replace the opcode at the breakpoint address with 0xCC
+push_opcode:
+    ; Parameters:
+    ; [bp + 4] - address of breakpoint
+    ; Returns:
+    ; CF - set if error
+
+    push bp
+    mov bp, sp
+
     push ax
+    push cx
+    push si
+    push di
     push es
 
-    xor ax, ax
-    mov es, ax
-
-    ; restoring original ISRs
-
-    cli
-
-    ; single step trap
-    ; (int 1h)
-    mov ax, [oldtrapisr]
-    mov [es:0x1 * 4], ax
-    mov ax, [oldtrapisr + 2]
-    mov [es:0x1 * 4 + 2], ax
-    ; breakpoint trap
-    ; (int 3h)
-    mov ax, [oldbrkisr]
-    mov [es:0x3 * 4], ax
-    mov ax, [oldbrkisr + 2]
-    mov [es:0x3 * 4 + 2], ax
-    ; COM port interrupt
-    ; (int 0Ch)
-    mov ax, [oldcomisr]
-    mov [es:0xC * 4], ax
-    mov ax, [oldcomisr + 2]
-    mov [es:0xC * 4 + 2], ax
-    ; return to parent process interrupt
-    ; (int 22h)
-    mov ax, [oldretisr]
-    mov [es:0x22 * 4], ax
-    mov ax, [oldretisr + 2]
-    mov [es:0x22 * 4 + 2], ax
-
-    ; disabling interrupts
-
-    ; disable OUT2
-    mov dx, MCR
-    in al, dx
-    and al, 0xF7 ; disable bit 3 (OUT2)
-    out dx, al
-    ; disable IER
-    mov dx, IER
-    xor al, al
-    out dx, al
-    ; disable PIC 
-    in al, 0x21
-    or al, 0x10
-    out 0x21, al
-
-    sti
-
+    push ds
     pop es
+
+    mov ax, [bp + 4]
+    mov cx, [opcodearrsize]
+    mov di, opcodespos
+
+    jcxz skip_push_search
+
+    cmp cx, 256
+    jae push_opcode_error
+
+    cld
+    repne scasw
+    jz push_opcode_error
+
+skip_push_search:
+    mov si, ax
+    mov di, [opcodearrsize]
+    mov es, [childseg]
+
+    ; opcode replaced for breakpoint in child process
+    mov al, [es:si]
+    mov byte [es:si], 0CCh
+    ; opcode stored in array for reference
+    mov [opcodes + di], al
+    shl di, 1
+    mov [opcodespos + di], si
+    inc word [opcodearrsize]
+
+    clc
+    jmp done_push
+
+push_opcode_error:
+    stc
+
+done_push:
+    pop es
+    pop di
+    pop si
+    pop cx
     pop ax
 
-    ret
+    pop bp
+    ret 2
 
-start:
-    ;-----initialize COM port for debugging-----
-    mov ah, 0
-    mov al, 0xE3
+
+; remove an opcode from the opcodes array
+; and restore the original opcode at the breakpoint address
+remove_opcode:
+    ; [bp + 4] - address of breakpoint
+    push bp
+    mov bp, sp
+
+    push ax
+    push cx
+    push si
+    push di
+    push es
+
+    push ds
+    pop es
+
+    push word [bp + 4]
+    call find_opcode
+    pop cx
+
+    cmp cx, 0xFFFF
+    je remove_opcode_error
+
+    mov si, cx
+    add si, opcodes
+    mov es, [childseg]
+
+    ; push di
+    mov di, [bp + 4]
+    cld
+
+    ; opcode replaced for original
+    lodsb
+    stosb
+
+    ; remove opcode and shift the array
+    push ds
+    pop es
+
+    ; setup di index for shifting addresses
+    mov di, cx
+    shl di, 1
+    add di, opcodespos
+    push di
+
+    ; shift the opcodes array
+    mov ax, [opcodearrsize]
+    sub ax, cx
+    dec ax
+    mov cx, ax
+    push cx
+
+    mov di, si
+    dec di
+    rep movsb
+
+    ; shift the address array
+    pop cx
+    pop di
+
+    mov si, di
+    add si, 2
+    rep movsw
+
+    dec word [opcodearrsize]
+    clc
+    jmp done_remove
+
+remove_opcode_error:
+    stc
+
+done_remove:
+    pop es
+    pop di
+    pop si
+    pop cx
+    pop ax
+
+    pop bp
+    ret 2
+
+;-------------------------COM port functions-------------------------
+
+; send a byte through COM port
+send_byte:
+    ; Parameters:
+    ; [bp + 4] - byte to send
+
+    push bp
+    mov bp, sp
+    push ax
+    push dx
+
+testline:
+    mov ah, 3
     xor dx, dx
     int 0x14
 
-    ;-----hook interrupt service routines-----
-    call hookISR
+    and ah, 32
+    jz testline
 
-    ;-----read file path-----
-    xor cx, cx
-    mov cl, [0x80]
-    cmp cl, 1
-    jl no_filepath
+    mov al, [bp + 4]
+    mov dx, 0x3F8
+    out dx, al
 
-    ; remove trailing spaces
-    dec cl
-    mov si, 0x82
-    mov di, filepath
-    cld
-    rep movsb
-
-    ;-----resizing memory for debugger-----
-    mov bx, terminate
-    add bx, 20
-    shr bx, 4
-
-    mov ax, cs
-    mov es, ax
-    mov ah, 0x4A
-    int 0x21
-
-    ;-----allocating memory for child process-----
-    mov ax, 0x4800
-    mov bx, 0x1000
-    int 0x21
-    jc no_memory_available
-    mov [childseg], ax
-
-    ;-----creating psp for child process-----
-    mov ah, 0x55
-    mov dx, [childseg]
-    mov si, 0
-    int 0x21
-
-    ;-----open .COM file-----
-    mov ax, 0x3D00
-    mov dx, filepath
-    int 0x21
-    jc file_not_found
-
-    ;-----load .COM file into memory-----
-    push ds
-
-    mov bx, ax
-    mov ah, 0x3F
-    mov cx, 0xFFFF
-    mov dx, 0x0100
-    mov ds, [childseg]
-    int 0x21
-    jc file_not_read
-
-    pop ds
-
-    ;-----close .COM file-----
-    mov ah, 0x3E
-    int 0x21
-
-    ;-----set up child process stack-----
-    mov [orig_sp], sp
-
-    mov ss, [childseg]
-    mov sp, 0xFFFE
-
-    pushf
+    pop dx
     pop ax
-    or ax, 0x0100
+    pop bp
+    ret 2
+
+
+; send a hex word through COM port
+send_hex:
+    ; Parameters:
+    ; [bp + 4] - value to send
+    ; Returns:
+    ; [bp + 4] - checksum value
+
+    push bp
+    mov bp, sp
     push ax
-    push word [childseg]
-    push word 0x0100
+    push dx
 
-    iret
+    xor ax, ax
+    xor dx, dx
 
-    ;-----come back to original process-----
-return_to_parent:
-    ; reset parent's registers
+    mov al, 0xF0
+    and al, [bp + 4]
+    shr al, 4
+
+    push ax
+    call convert_to_ascii
+    pop ax
+    add dl, al
+    push ax
+    call send_byte
+
+    mov ax, 0xF
+    and al, [bp + 4]
+    push ax
+    call convert_to_ascii
+    pop ax
+    add dl, al
+    push ax
+    call send_byte
+
+    mov [bp + 4], dl
+
+    pop dx
+    pop ax
+    pop bp
+    ret
+
+
+; send a reply packet through COM port
+send_reply:
+    ; Parameters:
+    ; [bp + 4] - address of reply packet
+
+    push bp
+    mov bp, sp
+    push ax
+    push si
+    
+    xor ax, ax
+    mov si, [bp + 4]
+
+replyloop:
+    mov al, [si]
+    push ax
+    call send_byte
+
+    inc si
+    cmp byte [si], 0
+    jnz replyloop
+
+    pop si
+    pop ax
+    pop bp
+    ret 2
+
+
+;-------------------------miscellaneous functions-------------------------
+
+; saving register states for debugging (used in trapisr and brkisr)
+save_registers:
+    push ax
+
+    mov ax, [bp - 2]
+    mov [regs + 0], ax  ; AX
+    mov ax, [bp - 8]
+    mov [regs + 2], ax  ; BX
+    mov ax, [bp - 4]
+    mov [regs + 4], ax  ; CX
+    mov ax, [bp - 6]
+    mov [regs + 6], ax  ; DX
+    mov ax, [bp - 14]
+    mov [regs + 8], ax  ; SI
+    mov ax, [bp - 16]
+    mov [regs + 10], ax ; DI
+    mov ax, [bp]
+    mov [regs + 12], ax ; BP
+    mov ax, [bp - 10]
+    sub ax, 8
+    mov [regs + 14], ax ; SP
+    mov ax, [bp + 2]
+    mov [regs + 16], ax ; IP
+    mov ax, [bp + 6]
+    mov [regs + 18], ax ; FLAGS
+    mov ax, [bp + 4]
+    mov [regs + 20], ax ; CS
+    mov ax, [bp - 18]
+    mov [regs + 22], ax ; DS
+    mov ax, [bp - 20]
+    mov [regs + 24], ax ; ES
+    mov [regs + 26], ss ; SS
+
+    pop ax
+    ret
+
+
+; transfer to parent process stack
+push_parent_stack:
+    mov [cs:tempregs], ss
+    mov [cs:tempregs + 2], sp
+    mov [cs:tempregs + 4], bp
+    mov [cs:tempregs + 6], ax
+    mov [cs:tempregs + 8], bx
+
+    pop bx
+
+    mov bp, sp
+    mov sp, [cs:parentstack + 1024]
     mov ax, cs
-    mov ds, ax
     mov ss, ax
-    mov sp, [orig_sp]
 
-    ; send reply to gdb that child exitted
-    cmp byte [firstpause], 0
-    jz child_skipped
+    push word [bp + 4]
+    push word [bp + 2]
+    push word [bp + 0]
 
-    push word exitreply
-    call send_reply
+    jmp bx
 
-child_skipped:
-    call unhookISR
+pop_parent_stack:
+    pop bx
 
-    jmp terminate
+    mov bp, sp
+    mov sp, [cs:tempregs + 2]
+    mov ss, [cs:tempregs]
 
-;-----error handling-----
-no_filepath:
-    jmp no_filepath
+    sub sp, 6
+    push word [bp + 4]
+    push word [bp + 2]
+    push word [bp + 0]
+    push bx
 
-file_not_found:
-    jmp file_not_found
+    mov bp, [cs:tempregs + 4]
+    mov ax, [cs:tempregs + 6]
+    mov bx, [cs:tempregs + 8]
 
-no_memory_available:
-    jmp no_memory_available
-
-file_not_read:
-    jmp file_not_read
+    ret
 
 
 ; change extract_hex everywhere and use convertor to extract address if not value
@@ -1312,6 +1324,12 @@ skip_extract_char:
 
 
 convert_to_ascii:
+    ; Parameters:
+    ; [bp + 4] - byte value to convert to ASCII
+
+    ; Returns:
+    ; [bp + 4] - ASCII representation of the byte value
+
     push bp
     mov bp, sp
     
@@ -1373,6 +1391,9 @@ check_packet:
     ; Parameters:
     ; [bp + 4] - packet to check against
 
+    ; Returns:
+    ; ZF - set if packet is valid
+
     push bp
     mov bp, sp
 
@@ -1412,137 +1433,137 @@ check_packet:
     ret 2
 
 
-
-printdebug:
-    call clrscrn
-
-    mov si, 6
-    mov cx, 12
-    mov ax, 0
-    mov bx, 5
-
-l3:
+printstr: push bp
+    mov bp, sp
+    push es
     push ax
     push bx
-    mov dx, [bp + si]
-    push dx
-    call printnum
-    sub si, 2
-    inc ax
-    loop l3
-
-    mov ax, 0
-    mov bx, 0
-    mov cx, 12
-    mov si, 4
-    mov dx, names
-
-l1:
-    push ax
-    push bx
+    push cx
     push dx
     push si
-    call printstr
-    add dx, 4
-    inc ax
-    loop l1
-
-    ret
-
-
-printstr: push bp
-mov bp, sp
-push es
-push ax
-push bx
-push cx
-push dx
-push si
-push di
-mov ax, 0xb800
-mov es, ax ; point es to video base
-mov di, 80 ; load di with columns per row
-mov ax, [bp+10] ; load ax with row number
-mul di ; multiply with columns per row
-mov di, ax ; save result in di
-add di, [bp+8] ; add column number
-shl di, 1 ; turn into byte count
-mov si, [bp+6] ; string to be printed
-mov cx, [bp+4] ; length of string
-mov ah, 0x07 ; normal attribute is fixed
+    push di
+    mov ax, 0xb800
+    mov es, ax ; point es to video base
+    mov di, 80 ; load di with columns per row
+    mov ax, [bp+10] ; load ax with row number
+    mul di ; multiply with columns per row
+    mov di, ax ; save result in di
+    add di, [bp+8] ; add column number
+    shl di, 1 ; turn into byte count
+    mov si, [bp+6] ; string to be printed
+    mov cx, [bp+4] ; length of string
+    mov ah, 0x07 ; normal attribute is fixed
 nextchar: mov al, [si] ; load next char of string
-mov [es:di], ax ; show next char on screen
-add di, 2 ; move to next screen location
-add si, 1 ; move to next char
-loop nextchar ; repeat the operation cx times
-pop di
-pop si
-pop dx
-pop cx
-pop bx
-pop ax
-pop es
-pop bp
-ret 8
+    mov [es:di], ax ; show next char on screen
+    add di, 2 ; move to next screen location
+    add si, 1 ; move to next char
+    loop nextchar ; repeat the operation cx times
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    pop es
+    pop bp
+    ret 8
 
 
 printnum: push bp
-mov bp, sp
-push es
-push ax
-push bx
-push cx
-push dx
-push di
-mov di, 80 ; load di with columns per row
-mov ax, [bp+8] ; load ax with row number
-mul di ; multiply with columns per row
-mov di, ax ; save result in di
-add di, [bp+6] ; add column number
-shl di, 1 ; turn into byte count
-add di, 8 ; to end of number location
-mov ax, 0xb800
-mov es, ax ; point es to video base
-mov ax, [bp+4] ; load number in ax
-mov bx, 16 ; use base 16 for division
-mov cx, 4 ; initialize count of digits
+    mov bp, sp
+    push es
+    push ax
+    push bx
+    push cx
+    push dx
+    push di
+    mov di, 80 ; load di with columns per row
+    mov ax, [bp+8] ; load ax with row number
+    mul di ; multiply with columns per row
+    mov di, ax ; save result in di
+    add di, [bp+6] ; add column number
+    shl di, 1 ; turn into byte count
+    add di, 8 ; to end of number location
+    mov ax, 0xb800
+    mov es, ax ; point es to video base
+    mov ax, [bp+4] ; load number in ax
+    mov bx, 16 ; use base 16 for division
+    mov cx, 4 ; initialize count of digits
 nextdigit: mov dx, 0 ; zero upper half of dividend
-div bx ; divide by 10
-add dl, 0x30 ; convert digit into ascii value
-cmp dl, 0x39 ; is the digit an alphabet
-jbe skipalpha ; no, skip addition
-add dl, 7 ; yes, make in alphabet code
+    div bx ; divide by 10
+    add dl, 0x30 ; convert digit into ascii value
+    cmp dl, 0x39 ; is the digit an alphabet
+    jbe skipalpha ; no, skip addition
+    add dl, 7 ; yes, make in alphabet code
 skipalpha: mov dh, 0x07 ; attach normal attribute
-mov [es:di], dx ; print char on screen
-sub di, 2 ; to previous screen location
-loop nextdigit ; if no divide it again
-pop di
-pop dx
-pop cx
-pop bx
-pop ax
-pop es
-pop bp
-ret 6
+    mov [es:di], dx ; print char on screen
+    sub di, 2 ; to previous screen location
+    loop nextdigit ; if no divide it again
+    pop di
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    pop es
+    pop bp
+    ret 6
 
 
-clrscrn: push es
-push ax
-push di
-mov ax, 0xb800
-mov es, ax ; point es to video base
-mov di, 0 ; point di to top left column
-nextloc: mov word [es:di], 0x0720 ; clear next char on screen
-add di, 2 ; move to next screen location
-cmp di, 4000 ; has the whole screen cleared
-jne nextloc ; if no clear next position
-pop di
-pop ax
-pop es
-ret
+;--------------------------data segment-------------------------
 
+;-----GDB protocol packets-----
+supportPack:    db 'qSupported', 0
+contPack:       db 'vCont?', 0
+mustreplyPack:  db 'vMustReplyEmpty', 0
+multiPack:      db 'Hg0', 0
+threadPack:     db 'qfThreadInfo', 0
+endthreadPack:  db 'qsThreadInfo', 0
+attachedPack:   db 'qAttached', 0
+currthreadPack: db 'Hc-1', 0
+querycurrPack:  db 'qC', 0
 
+;------GDB protocol replies-----
+supportreply:   db '$PacketSize=512;swbreak+;kill+;vContSupported-#67', 0
+nothing:        db '$#00', 0
+okreply:        db '$OK#9a', 0
+errorreply:     db '$E01#xx', 0
+stopreply:      db '$S05#b8', 0
+singletreply:   db '$m1#9e', 0
+endlistreply:   db '$l#6c', 0
+childkillreply: db '$0#30', 0
+currthreply:    db '$QC1#c5', 0
+exitreply:      db '$W00#57', 0
 
-terminate:
-    mov ax, 4C00h
-    int 21h
+;-----GDB general packets-----
+availpacks:     db 'q', '?', 'k', 's', 'c', 'p', 'g', 'Z', 'z', 'm', 'X'
+addresspacks:   dw gdb_unknown, gdb_why, gdb_kill, gdb_debugger, gdb_debugger, gdb_extract_register, gdb_send_registers, gdb_set_breakpoint, gdb_remove_breakpoint, gdb_read_memory, gdb_write_memory
+packslength:    dw ($ - addresspacks) / 2
+
+;-----debugger variables-----
+orig_sp:        dw 0
+oldtrapisr:     dd 0
+oldbrkisr:      dd 0
+oldcomisr:      dd 0
+oldretisr:      dd 0
+filepath:       times 128 db 0
+
+;-----debugger data-----
+childseg:       dw 0
+regs:           times 14 dw 0
+packet:         times ARRAY_SIZE db 0
+packettail:     dw packet
+inprocessing:   db 0
+chksum:         db 0
+startprogram:   db 0
+forcepause:     db 0
+
+;-----breakpoint variables-----
+reinstallbrk:   db 0
+tempbrkaddr:    dw 0
+opcodearrsize:  dw 0
+opcodes:        times ARRAY_SIZE db 0
+opcodespos:     times ARRAY_SIZE dw 0
+
+;-----temp stack-----
+tempregs:       dw 0, 0, 0, 0, 0       ; SS, SP, BP, AX, BX
+parentstack:    times ARRAY_SIZE dw 0

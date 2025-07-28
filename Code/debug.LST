@@ -1,1567 +1,1604 @@
      1                                  ; CHECK ALL PACKET INPUTS
      2                                  ; CHECK ALL PACKET OUTPUTS
      3                                  ; implement custom stack for parent process so that parent does not hog child process stack
-     4                                  ; stop before starting execution of program
-     5                                  ; check if registers are initialized
-     6                                  ; breakpoint will take offset address while memory will take physical address
-     7                                  ; check why exit not sent
-     8                                  
-     9                                  [org 0x0100]
+     4                                  ; check why exit not sent (2) debugger does not exit after program exits (3) as long as connection exists gdb won't exit
+     5                                  ; remove debug print statements
+     6                                  ; improve documentation
+     7                                  ; add webview? for disassembly
+     8                                  ; show correct values for registers (16 bit) and values of labels
+     9                                  ; move variables down
     10                                  
-    11 00000000 E9AB0F                      jmp start
+    11                                  [org 0x0100]
     12                                  
-    13                                  %define ARRAY_SIZE 512
-    14                                  %define MCR 0x03FC
-    15                                  %define IER 0x03F9
-    16                                  
-    17 00000003 0000                    orig_sp:        dw 0
-    18 00000005 00000000                oldtrapisr:     dd 0
-    19 00000009 00000000                oldbrkisr:      dd 0
-    20 0000000D 00000000                oldcomisr:      dd 0
-    21 00000011 00000000                oldretisr:      dd 0
-    22 00000015 00<rep 80h>             filepath:       times 128 db 0
-    23 00000095 0000                    childseg:       dw 0
-    24 00000097 00                      firstpause:     db 0
-    25                                  
-    26 00000098 464C203D4353203D49-     names:          db 'FL =CS =IP =BP =AX =BX =CX =DX =SI =DI =DS =ES ='
-    26 000000A1 50203D4250203D4158-
-    26 000000AA 203D4258203D435820-
-    26 000000B3 3D4458203D5349203D-
-    26 000000BC 4449203D4453203D45-
-    26 000000C5 53203D             
-    27                                  
-    28 000000C8 0000<rep Eh>            regs:           times 14 dw 0
-    29 000000E4 00                      chksum:         db 0
-    30 000000E5 00<rep 200h>            packet:         times ARRAY_SIZE db 0
-    31 000002E5 [E500]                  packettail:     dw packet
-    32 000002E7 00                      inprocessing:   db 0
-    33                                  
-    34 000002E8 713F6B736370675A7A-     availpacks:     db 'q', '?', 'k', 's', 'c', 'p', 'g', 'Z', 'z', 'm', 'X'
-    34 000002F1 6D58               
-    35 000002F3 [010D][310D][390D]-     addresspacks:   dw gdb_unknown, gdb_why, gdb_kill, gdb_debugger, gdb_debugger, gdb_extract_register, gdb_send_registers, gdb_set_breakpoint, gdb_remove_breakpoint, gdb_read_memory, gdb_write_memory
-    35 000002F9 [430D][430D][4A0D]-
-    35 000002FF [800D][AB0D][E30D]-
-    35 00000305 [1B0E][820E]       
-    36 00000309 0B00                    packslength:    dw ($ - addresspacks) / 2
-    37                                  
-    38 0000030B 71537570706F727465-     supportPack:    db 'qSupported', 0
-    38 00000314 6400               
-    39 00000316 76436F6E743F00          contPack:       db 'vCont?', 0
-    40 0000031D 764D7573745265706C-     mustreplyPack:  db 'vMustReplyEmpty', 0
-    40 00000326 79456D70747900     
-    41 0000032D 48673000                multiPack:      db 'Hg0', 0
-    42 00000331 716654687265616449-     threadPack:     db 'qfThreadInfo', 0
-    42 0000033A 6E666F00           
-    43 0000033E 717354687265616449-     endthreadPack:  db 'qsThreadInfo', 0
-    43 00000347 6E666F00           
-    44 0000034B 714174746163686564-     attachedPack:   db 'qAttached', 0
-    44 00000354 00                 
-    45 00000355 48632D3100              currthreadPack: db 'Hc-1', 0
-    46 0000035A 714300                  querycurrPack:  db 'qC', 0
-    47                                  
-    48 0000035D 245061636B65745369-     supportreply:   db '$PacketSize=512;swbreak+;kill+;vContSupported-#67', 0
-    48 00000366 7A653D3531323B7377-
-    48 0000036F 627265616B2B3B6B69-
-    48 00000378 6C6C2B3B76436F6E74-
-    48 00000381 537570706F72746564-
-    48 0000038A 2D23363700         
-    49 0000038F 2423303000              nothing:        db '$#00', 0
-    50 00000394 244F4B23396100          okreply:        db '$OK#9a', 0
-    51 0000039B 2445303123787800        errorreply:     db '$E01#xx', 0
-    52 000003A3 2453303523623800        stopreply:      db '$S05#b8', 0
-    53 000003AB 246D3123396500          singletreply:   db '$m1#9e', 0
-    54 000003B2 246C23366300            endlistreply:   db '$l#6c', 0
-    55 000003B8 243023333000            childkillreply: db '$0#30', 0
-    56 000003BE 2451433123633500        currthreply:    db '$QC1#c5', 0
-    57 000003C6 2457303023353700        exitreply:      db '$W00#57', 0
-    58                                  
-    59 000003CE 00                      reinstallbrk:   db 0
-    60 000003CF 0000                    tempbrkaddr:    dw 0
-    61 000003D1 0000                    opcodearrsize:  dw 0
-    62 000003D3 00<rep 200h>            opcodes:        times ARRAY_SIZE db 0
-    63 000005D3 0000<rep 200h>          opcodespos:     times ARRAY_SIZE dw 0
-    64                                  
-    65                                  
-    66                                  find_opcode:
-    67                                      ; Parameters:
-    68                                      ; [bp + 4] - address of breakpoint
-    69                                      ; Returns:
-    70                                      ; [bp + 4] - index in opcodes array
-    71 000009D3 55                          push bp
-    72 000009D4 89E5                        mov bp, sp
-    73                                      
-    74 000009D6 50                          push ax
-    75 000009D7 51                          push cx
-    76 000009D8 57                          push di
-    77 000009D9 06                          push es
-    78                                  
-    79 000009DA 1E                          push ds
-    80 000009DB 07                          pop es
+    13 00000000 E9B90F                      jmp start
+    14                                  
+    15                                  %define ARRAY_SIZE 512
+    16                                  %define MCR 0x03FC
+    17                                  %define IER 0x03F9
+    18                                  
+    19 00000003 0000                    orig_sp:        dw 0
+    20 00000005 00000000                oldtrapisr:     dd 0
+    21 00000009 00000000                oldbrkisr:      dd 0
+    22 0000000D 00000000                oldcomisr:      dd 0
+    23 00000011 00000000                oldretisr:      dd 0
+    24 00000015 00<rep 80h>             filepath:       times 128 db 0
+    25 00000095 0000                    childseg:       dw 0
+    26                                  
+    27 00000097 464C203D4353203D49-     names:          db 'FL =CS =IP =BP =AX =BX =CX =DX =SI =DI =DS =ES ='
+    27 000000A0 50203D4250203D4158-
+    27 000000A9 203D4258203D435820-
+    27 000000B2 3D4458203D5349203D-
+    27 000000BB 4449203D4453203D45-
+    27 000000C4 53203D             
+    28                                  
+    29 000000C7 0000<rep Eh>            regs:           times 14 dw 0
+    30 000000E3 00                      chksum:         db 0
+    31 000000E4 00<rep 200h>            packet:         times ARRAY_SIZE db 0
+    32 000002E4 [E400]                  packettail:     dw packet
+    33 000002E6 00                      inprocessing:   db 0
+    34 000002E7 00                      startprogram:   db 0
+    35 000002E8 00                      forcepause:     db 0
+    36                                  
+    37 000002E9 713F6B736370675A7A-     availpacks:     db 'q', '?', 'k', 's', 'c', 'p', 'g', 'Z', 'z', 'm', 'X'
+    37 000002F2 6D58               
+    38 000002F4 [0A0D][3A0D][420D]-     addresspacks:   dw gdb_unknown, gdb_why, gdb_kill, gdb_debugger, gdb_debugger, gdb_extract_register, gdb_send_registers, gdb_set_breakpoint, gdb_remove_breakpoint, gdb_read_memory, gdb_write_memory
+    38 000002FA [4C0D][4C0D][580D]-
+    38 00000300 [8E0D][B90D][F10D]-
+    38 00000306 [290E][900E]       
+    39 0000030A 0B00                    packslength:    dw ($ - addresspacks) / 2
+    40                                  
+    41 0000030C 71537570706F727465-     supportPack:    db 'qSupported', 0
+    41 00000315 6400               
+    42 00000317 76436F6E743F00          contPack:       db 'vCont?', 0
+    43 0000031E 764D7573745265706C-     mustreplyPack:  db 'vMustReplyEmpty', 0
+    43 00000327 79456D70747900     
+    44 0000032E 48673000                multiPack:      db 'Hg0', 0
+    45 00000332 716654687265616449-     threadPack:     db 'qfThreadInfo', 0
+    45 0000033B 6E666F00           
+    46 0000033F 717354687265616449-     endthreadPack:  db 'qsThreadInfo', 0
+    46 00000348 6E666F00           
+    47 0000034C 714174746163686564-     attachedPack:   db 'qAttached', 0
+    47 00000355 00                 
+    48 00000356 48632D3100              currthreadPack: db 'Hc-1', 0
+    49 0000035B 714300                  querycurrPack:  db 'qC', 0
+    50                                  
+    51 0000035E 245061636B65745369-     supportreply:   db '$PacketSize=512;swbreak+;kill+;vContSupported-#67', 0
+    51 00000367 7A653D3531323B7377-
+    51 00000370 627265616B2B3B6B69-
+    51 00000379 6C6C2B3B76436F6E74-
+    51 00000382 537570706F72746564-
+    51 0000038B 2D23363700         
+    52 00000390 2423303000              nothing:        db '$#00', 0
+    53 00000395 244F4B23396100          okreply:        db '$OK#9a', 0
+    54 0000039C 2445303123787800        errorreply:     db '$E01#xx', 0
+    55 000003A4 2453303523623800        stopreply:      db '$S05#b8', 0
+    56 000003AC 246D3123396500          singletreply:   db '$m1#9e', 0
+    57 000003B3 246C23366300            endlistreply:   db '$l#6c', 0
+    58 000003B9 243023333000            childkillreply: db '$0#30', 0
+    59 000003BF 2451433123633500        currthreply:    db '$QC1#c5', 0
+    60 000003C7 2457303023353700        exitreply:      db '$W00#57', 0
+    61                                  
+    62 000003CF 00                      reinstallbrk:   db 0
+    63 000003D0 0000                    tempbrkaddr:    dw 0
+    64 000003D2 0000                    opcodearrsize:  dw 0
+    65 000003D4 00<rep 200h>            opcodes:        times ARRAY_SIZE db 0
+    66 000005D4 0000<rep 200h>          opcodespos:     times ARRAY_SIZE dw 0
+    67                                  
+    68                                  
+    69                                  find_opcode:
+    70                                      ; Parameters:
+    71                                      ; [bp + 4] - address of breakpoint
+    72                                      ; Returns:
+    73                                      ; [bp + 4] - index in opcodes array
+    74 000009D4 55                          push bp
+    75 000009D5 89E5                        mov bp, sp
+    76                                      
+    77 000009D7 50                          push ax
+    78 000009D8 51                          push cx
+    79 000009D9 57                          push di
+    80 000009DA 06                          push es
     81                                  
-    82 000009DC 8B4604                      mov ax, [bp + 4]
-    83 000009DF 8B0E[D103]                  mov cx, [opcodearrsize]
-    84 000009E3 BF[D305]                    mov di, opcodespos
-    85                                  
-    86 000009E6 E305                        jcxz missing_opcode
-    87                                  
-    88 000009E8 FC                          cld
-    89 000009E9 F2AF                        repne scasw
-    90 000009EB 7407                        jz found_opcode_addr
-    91                                  
-    92                                  missing_opcode:
-    93 000009ED C74604FFFF                  mov word [bp + 4], 0xFFFF
+    82 000009DB 1E                          push ds
+    83 000009DC 07                          pop es
+    84                                  
+    85 000009DD 8B4604                      mov ax, [bp + 4]
+    86 000009E0 8B0E[D203]                  mov cx, [opcodearrsize]
+    87 000009E4 BF[D405]                    mov di, opcodespos
+    88                                  
+    89 000009E7 E305                        jcxz missing_opcode
+    90                                  
+    91 000009E9 FC                          cld
+    92 000009EA F2AF                        repne scasw
+    93 000009EC 7407                        jz found_opcode_addr
     94                                  
-    95 000009F2 EB09                        jmp done_find
-    96                                  
-    97                                  found_opcode_addr:
-    98 000009F4 81EF[D505]                  sub di, opcodespos + 2
-    99 000009F8 D1EF                        shr di, 1
-   100 000009FA 897E04                      mov [bp + 4], di
-   101                                  
-   102                                  done_find:
-   103 000009FD 07                          pop es
-   104 000009FE 5F                          pop di
-   105 000009FF 59                          pop cx
-   106 00000A00 58                          pop ax
-   107                                  
-   108 00000A01 5D                          pop bp
-   109 00000A02 C3                          ret
+    95                                  missing_opcode:
+    96 000009EE C74604FFFF                  mov word [bp + 4], 0xFFFF
+    97                                  
+    98 000009F3 EB09                        jmp done_find
+    99                                  
+   100                                  found_opcode_addr:
+   101 000009F5 81EF[D605]                  sub di, opcodespos + 2
+   102 000009F9 D1EF                        shr di, 1
+   103 000009FB 897E04                      mov [bp + 4], di
+   104                                  
+   105                                  done_find:
+   106 000009FE 07                          pop es
+   107 000009FF 5F                          pop di
+   108 00000A00 59                          pop cx
+   109 00000A01 58                          pop ax
    110                                  
-   111                                  push_opcode:
-   112                                      ; [bp + 4] - address of breakpoint
-   113 00000A03 55                          push bp
-   114 00000A04 89E5                        mov bp, sp
-   115                                  
-   116 00000A06 50                          push ax
-   117 00000A07 51                          push cx
-   118 00000A08 56                          push si
-   119 00000A09 57                          push di
-   120 00000A0A 06                          push es
-   121                                  
-   122 00000A0B 1E                          push ds
-   123 00000A0C 07                          pop es
+   111 00000A02 5D                          pop bp
+   112 00000A03 C3                          ret
+   113                                  
+   114                                  push_opcode:
+   115                                      ; [bp + 4] - address of breakpoint
+   116 00000A04 55                          push bp
+   117 00000A05 89E5                        mov bp, sp
+   118                                  
+   119 00000A07 50                          push ax
+   120 00000A08 51                          push cx
+   121 00000A09 56                          push si
+   122 00000A0A 57                          push di
+   123 00000A0B 06                          push es
    124                                  
-   125 00000A0D 8B4604                      mov ax, [bp + 4]
-   126 00000A10 8B0E[D103]                  mov cx, [opcodearrsize]
-   127 00000A14 BF[D305]                    mov di, opcodespos
-   128                                  
-   129 00000A17 E30B                        jcxz skip_push_search
-   130                                  
-   131 00000A19 81F90001                    cmp cx, 256
-   132 00000A1D 7327                        jae push_opcode_error
+   125 00000A0C 1E                          push ds
+   126 00000A0D 07                          pop es
+   127                                  
+   128 00000A0E 8B4604                      mov ax, [bp + 4]
+   129 00000A11 8B0E[D203]                  mov cx, [opcodearrsize]
+   130 00000A15 BF[D405]                    mov di, opcodespos
+   131                                  
+   132 00000A18 E30B                        jcxz skip_push_search
    133                                  
-   134 00000A1F FC                          cld
-   135 00000A20 F2AF                        repne scasw
-   136 00000A22 7422                        jz push_opcode_error
-   137                                  
-   138                                  skip_push_search:
-   139 00000A24 89C6                        mov si, ax
-   140 00000A26 8B3E[D103]                  mov di, [opcodearrsize]
-   141 00000A2A 8E06[9500]                  mov es, [childseg]
-   142                                  
-   143                                      ; opcode replaced for breakpoint in child process
-   144 00000A2E 268A04                      mov al, [es:si]
-   145 00000A31 26C604CC                    mov byte [es:si], 0CCh
-   146                                      ; opcode stored in array for reference
-   147 00000A35 8885[D303]                  mov [opcodes + di], al
-   148 00000A39 D1E7                        shl di, 1
-   149 00000A3B 89B5[D305]                  mov [opcodespos + di], si
-   150 00000A3F FF06[D103]                  inc word [opcodearrsize]
-   151                                  
-   152 00000A43 F8                          clc
-   153 00000A44 EB01                        jmp done_push
+   134 00000A1A 81F90001                    cmp cx, 256
+   135 00000A1E 7327                        jae push_opcode_error
+   136                                  
+   137 00000A20 FC                          cld
+   138 00000A21 F2AF                        repne scasw
+   139 00000A23 7422                        jz push_opcode_error
+   140                                  
+   141                                  skip_push_search:
+   142 00000A25 89C6                        mov si, ax
+   143 00000A27 8B3E[D203]                  mov di, [opcodearrsize]
+   144 00000A2B 8E06[9500]                  mov es, [childseg]
+   145                                  
+   146                                      ; opcode replaced for breakpoint in child process
+   147 00000A2F 268A04                      mov al, [es:si]
+   148 00000A32 26C604CC                    mov byte [es:si], 0CCh
+   149                                      ; opcode stored in array for reference
+   150 00000A36 8885[D403]                  mov [opcodes + di], al
+   151 00000A3A D1E7                        shl di, 1
+   152 00000A3C 89B5[D405]                  mov [opcodespos + di], si
+   153 00000A40 FF06[D203]                  inc word [opcodearrsize]
    154                                  
-   155                                  push_opcode_error:
-   156 00000A46 F9                          stc
+   155 00000A44 F8                          clc
+   156 00000A45 EB01                        jmp done_push
    157                                  
-   158                                  done_push:
-   159 00000A47 07                          pop es
-   160 00000A48 5F                          pop di
-   161 00000A49 5E                          pop si
-   162 00000A4A 59                          pop cx
-   163 00000A4B 58                          pop ax
-   164                                  
-   165 00000A4C 5D                          pop bp
-   166 00000A4D C20200                      ret 2
+   158                                  push_opcode_error:
+   159 00000A47 F9                          stc
+   160                                  
+   161                                  done_push:
+   162 00000A48 07                          pop es
+   163 00000A49 5F                          pop di
+   164 00000A4A 5E                          pop si
+   165 00000A4B 59                          pop cx
+   166 00000A4C 58                          pop ax
    167                                  
-   168                                  remove_opcode:
-   169                                      ; [bp + 4] - address of breakpoint
-   170 00000A50 55                          push bp
-   171 00000A51 89E5                        mov bp, sp
-   172                                  
-   173 00000A53 50                          push ax
-   174 00000A54 51                          push cx
-   175 00000A55 56                          push si
-   176 00000A56 57                          push di
-   177 00000A57 06                          push es
-   178                                  
-   179 00000A58 1E                          push ds
-   180 00000A59 07                          pop es
+   168 00000A4D 5D                          pop bp
+   169 00000A4E C20200                      ret 2
+   170                                  
+   171                                  remove_opcode:
+   172                                      ; [bp + 4] - address of breakpoint
+   173 00000A51 55                          push bp
+   174 00000A52 89E5                        mov bp, sp
+   175                                  
+   176 00000A54 50                          push ax
+   177 00000A55 51                          push cx
+   178 00000A56 56                          push si
+   179 00000A57 57                          push di
+   180 00000A58 06                          push es
    181                                  
-   182 00000A5A FF7604                      push word [bp + 4]
-   183 00000A5D E873FF                      call find_opcode
-   184 00000A60 59                          pop cx
-   185                                  
-   186 00000A61 83F9FF                      cmp cx, 0xFFFF
-   187 00000A64 7439                        je remove_opcode_error
+   182 00000A59 1E                          push ds
+   183 00000A5A 07                          pop es
+   184                                  
+   185 00000A5B FF7604                      push word [bp + 4]
+   186 00000A5E E873FF                      call find_opcode
+   187 00000A61 59                          pop cx
    188                                  
-   189                                  ;     mov ax, [bp + 4]
-   190                                  ;     mov cx, [opcodearrsize]
-   191                                  ;     mov di, opcodespos
-   192                                  
-   193                                  ;     jcxz remove_opcode_error
-   194                                  
-   195                                  ;     cld
-   196                                  ;     repne scasw
-   197                                  ;     jz found_opcode_address
-   198                                  
-   199                                  ;     jmp remove_opcode_error
-   200                                  
-   201                                  ; found_opcode_address:
-   202                                      ; sub di, 2
-   203 00000A66 89CE                        mov si, cx
-   204 00000A68 81C6[D303]                  add si, opcodes
-   205                                      ; add di, opcodespos
-   206                                      ; mov si, [opcodearrsize]
-   207                                      ; sub si, cx
-   208                                      ; add si, opcodes - 1
-   209 00000A6C 8E06[9500]                  mov es, [childseg]
-   210                                  
-   211                                      ; push di
-   212 00000A70 8B7E04                      mov di, [bp + 4]
-   213 00000A73 FC                          cld
-   214                                  
-   215                                      ; opcode replaced for original
-   216 00000A74 AC                          lodsb
-   217 00000A75 AA                          stosb
-   218                                  
-   219                                      ; remove opcode and shift the array
-   220 00000A76 1E                          push ds
-   221 00000A77 07                          pop es
-   222                                  
-   223                                      ; setup di index for shifting addresses
-   224 00000A78 89CF                        mov di, cx
-   225 00000A7A D1E7                        shl di, 1
-   226 00000A7C 81C7[D305]                  add di, opcodespos
-   227 00000A80 57                          push di
+   189 00000A62 83F9FF                      cmp cx, 0xFFFF
+   190 00000A65 7439                        je remove_opcode_error
+   191                                  
+   192 00000A67 89CE                        mov si, cx
+   193 00000A69 81C6[D403]                  add si, opcodes
+   194 00000A6D 8E06[9500]                  mov es, [childseg]
+   195                                  
+   196                                      ; push di
+   197 00000A71 8B7E04                      mov di, [bp + 4]
+   198 00000A74 FC                          cld
+   199                                  
+   200                                      ; opcode replaced for original
+   201 00000A75 AC                          lodsb
+   202 00000A76 AA                          stosb
+   203                                  
+   204                                      ; remove opcode and shift the array
+   205 00000A77 1E                          push ds
+   206 00000A78 07                          pop es
+   207                                  
+   208                                      ; setup di index for shifting addresses
+   209 00000A79 89CF                        mov di, cx
+   210 00000A7B D1E7                        shl di, 1
+   211 00000A7D 81C7[D405]                  add di, opcodespos
+   212 00000A81 57                          push di
+   213                                  
+   214                                      ; shift the opcodes array
+   215 00000A82 A1[D203]                    mov ax, [opcodearrsize]
+   216 00000A85 29C8                        sub ax, cx
+   217 00000A87 48                          dec ax
+   218 00000A88 89C1                        mov cx, ax
+   219 00000A8A 51                          push cx
+   220                                  
+   221 00000A8B 89F7                        mov di, si
+   222 00000A8D 4F                          dec di
+   223 00000A8E F3A4                        rep movsb
+   224                                  
+   225                                      ; shift the address array
+   226 00000A90 59                          pop cx
+   227 00000A91 5F                          pop di
    228                                  
-   229                                      ; shift the opcodes array
-   230 00000A81 A1[D103]                    mov ax, [opcodearrsize]
-   231 00000A84 29C8                        sub ax, cx
-   232 00000A86 48                          dec ax
-   233 00000A87 89C1                        mov cx, ax
-   234 00000A89 51                          push cx
-   235                                  
-   236 00000A8A 89F7                        mov di, si
-   237 00000A8C 4F                          dec di
-   238 00000A8D F3A4                        rep movsb
-   239                                      ; shift the address array
-   240 00000A8F 59                          pop cx
-   241 00000A90 5F                          pop di
-   242                                  
-   243 00000A91 89FE                        mov si, di
-   244 00000A93 83C602                      add si, 2
-   245 00000A96 F3A5                        rep movsw
+   229 00000A92 89FE                        mov si, di
+   230 00000A94 83C602                      add si, 2
+   231 00000A97 F3A5                        rep movsw
+   232                                  
+   233 00000A99 FF0E[D203]                  dec word [opcodearrsize]
+   234 00000A9D F8                          clc
+   235 00000A9E EB01                        jmp done_remove
+   236                                  
+   237                                  remove_opcode_error:
+   238 00000AA0 F9                          stc
+   239                                  
+   240                                  done_remove:
+   241 00000AA1 07                          pop es
+   242 00000AA2 5F                          pop di
+   243 00000AA3 5E                          pop si
+   244 00000AA4 59                          pop cx
+   245 00000AA5 58                          pop ax
    246                                  
-   247 00000A98 FF0E[D103]                  dec word [opcodearrsize]
-   248 00000A9C F8                          clc
-   249 00000A9D EB01                        jmp done_remove
+   247 00000AA6 5D                          pop bp
+   248 00000AA7 C20200                      ret 2
+   249                                  
    250                                  
-   251                                  remove_opcode_error:
-   252 00000A9F F9                          stc
-   253                                  
-   254                                  done_remove:
-   255 00000AA0 07                          pop es
-   256 00000AA1 5F                          pop di
-   257 00000AA2 5E                          pop si
-   258 00000AA3 59                          pop cx
-   259 00000AA4 58                          pop ax
-   260                                  
-   261 00000AA5 5D                          pop bp
-   262 00000AA6 C20200                      ret 2
-   263                                  
-   264                                  
-   265                                  trapisr:
-   266 00000AA9 55                          push bp
-   267 00000AAA 89E5                        mov bp, sp
-   268                                  
-   269 00000AAC 60                          pusha
-   270 00000AAD 1E                          push ds
-   271 00000AAE 06                          push es
-   272                                  
-   273 00000AAF 0E                          push cs
-   274 00000AB0 1F                          pop ds
-   275                                  
-   276                                      ; replace this if possible
-   277 00000AB1 803E[9700]00                cmp byte [firstpause], 0
-   278 00000AB6 740D                        jz skip_send_stopreply
-   279                                  
-   280                                      ; check if breakpoint is set in previous trap
-   281                                      ; if so skip waiting for packet and return after restoring
-   282 00000AB8 803E[CE03]01                cmp byte [reinstallbrk], 1
-   283 00000ABD 743C                        jz restore_breakpoint
-   284                                  
-   285 00000ABF 68[A303]                    push word stopreply
-   286 00000AC2 E84201                      call send_reply
-   287                                  
-   288                                  skip_send_stopreply:
-   289 00000AC5 E89600                      call save_registers
-   290                                      
-   291                                      ; wait for comisr to receive a packet
-   292 00000AC8 FB                          sti
+   251                                  trapisr:
+   252 00000AAA 55                          push bp
+   253 00000AAB 89E5                        mov bp, sp
+   254                                  
+   255 00000AAD 60                          pusha
+   256 00000AAE 1E                          push ds
+   257 00000AAF 06                          push es
+   258                                  
+   259 00000AB0 0E                          push cs
+   260 00000AB1 1F                          pop ds
+   261                                  
+   262                                      ; check if breakpoint was set in previous instruction
+   263 00000AB2 803E[CF03]01                cmp byte [reinstallbrk], 1
+   264 00000AB7 7518                        jne send_stop_response
+   265                                  
+   266 00000AB9 B0CC                        mov al, 0xCC
+   267 00000ABB 8B3E[D003]                  mov di, [tempbrkaddr]
+   268 00000ABF 8E06[9500]                  mov es, [childseg]
+   269 00000AC3 C606[CF03]00                mov byte [reinstallbrk], 0
+   270                                  
+   271 00000AC8 FC                          cld
+   272 00000AC9 AA                          stosb
+   273                                  
+   274                                      ; if this is a force step for reinstalling breakpoint, skip waiting for packet
+   275 00000ACA 803E[E802]01                cmp byte [forcepause], 1
+   276 00000ACF 7428                        jz packet_continue
+   277                                  
+   278                                  send_stop_response:
+   279 00000AD1 68[A403]                    push word stopreply
+   280 00000AD4 E83901                      call send_reply
+   281                                  
+   282 00000AD7 E88D00                      call save_registers
+   283                                      
+   284                                      ; wait for comisr to receive a packet
+   285 00000ADA FB                          sti
+   286                                  
+   287                                  wait_packet:
+   288 00000ADB 803E[E602]00                cmp byte [inprocessing], 0
+   289 00000AE0 74F9                        je wait_packet
+   290                                  
+   291 00000AE2 803E[E500]73                cmp byte [packet + 1], 's'
+   292 00000AE7 7409                        je packet_step
    293                                  
-   294                                  wait_packet:
-   295 00000AC9 803E[E702]00                cmp byte [inprocessing], 0
-   296 00000ACE 74F9                        je wait_packet
-   297                                  
-   298 00000AD0 803E[E600]73                cmp byte [packet + 1], 's'
-   299 00000AD5 7409                        je packet_step
-   300                                  
-   301 00000AD7 803E[E600]63                cmp byte [packet + 1], 'c'
-   302 00000ADC 7409                        je packet_continue
+   294 00000AE9 803E[E500]63                cmp byte [packet + 1], 'c'
+   295 00000AEE 7409                        je packet_continue
+   296                                  
+   297 00000AF0 EBE9                        jmp wait_packet
+   298                                  
+   299                                  packet_step:
+   300 00000AF2 814E060001                  or word [bp + 6], 0x0100
+   301                                  
+   302 00000AF7 EB05                        jmp wait_packet_done
    303                                  
-   304 00000ADE EBE9                        jmp wait_packet
-   305                                  
-   306                                  packet_step:
-   307 00000AE0 814E060001                  or word [bp + 6], 0x0100
-   308                                  
-   309 00000AE5 EB05                        jmp wait_packet_done
+   304                                  packet_continue:
+   305 00000AF9 816606FFFE                  and word [bp + 6], 0xFEFF
+   306                                  
+   307                                  wait_packet_done:
+   308 00000AFE C606[E602]00                mov byte [inprocessing], 0
+   309 00000B03 C606[E802]00                mov byte [forcepause], 0
    310                                  
-   311                                  packet_continue:
-   312 00000AE7 816606FFFE                  and word [bp + 6], 0xFEFF
-   313                                  
-   314                                  wait_packet_done:
-   315 00000AEC C606[E702]00                mov byte [inprocessing], 0
-   316 00000AF1 C606[9700]01                mov byte [firstpause], 1
+   311 00000B08 07                          pop es
+   312 00000B09 1F                          pop ds
+   313 00000B0A 61                          popa
+   314                                  
+   315 00000B0B 5D                          pop bp
+   316 00000B0C CF                          iret
    317                                  
-   318 00000AF6 07                          pop es
-   319 00000AF7 1F                          pop ds
-   320 00000AF8 61                          popa
+   318                                  brkisr:
+   319 00000B0D 55                          push bp
+   320 00000B0E 89E5                        mov bp, sp
    321                                  
-   322 00000AF9 5D                          pop bp
-   323 00000AFA CF                          iret
-   324                                  
-   325                                  restore_breakpoint:
-   326 00000AFB B0CC                        mov al, 0xCC
-   327 00000AFD 8B3E[CF03]                  mov di, [tempbrkaddr]
-   328 00000B01 8E06[9500]                  mov es, [childseg]
-   329 00000B05 C606[CE03]00                mov byte [reinstallbrk], 0
-   330                                  
-   331 00000B0A FC                          cld
-   332 00000B0B AA                          stosb
-   333                                  
-   334 00000B0C EBBB                        jmp wait_packet
-   335                                  
-   336                                  brkisr:
-   337 00000B0E 55                          push bp
-   338 00000B0F 89E5                        mov bp, sp
-   339                                  
-   340 00000B11 60                          pusha
-   341 00000B12 1E                          push ds
-   342 00000B13 06                          push es
-   343                                  
-   344 00000B14 0E                          push cs
-   345 00000B15 1F                          pop ds
-   346                                  
-   347                                      ; adjust ip to re-execute the instruction after the breakpoint
-   348 00000B16 FF4E02                      dec word [bp + 2]
-   349                                  
-   350                                      ; restore the opcode so that the program can continue
-   351                                      ; ----- ideally check if es contains the same segment as childseg and fix ip if not
-   352 00000B19 8E4604                      mov es, [bp + 4]
-   353 00000B1C 8B7E02                      mov di, [bp + 2]
-   354                                      
-   355                                      ; set flags to indicate re-installation of breakpoint
-   356 00000B1F C606[CE03]01                mov byte [reinstallbrk], 1
-   357 00000B24 893E[CF03]                  mov word [tempbrkaddr], di
-   358                                  
-   359                                      ; find the opcode in the opcodes array
-   360 00000B28 57                          push di
-   361 00000B29 E8A7FE                      call find_opcode
-   362 00000B2C 5E                          pop si
-   363                                  
-   364 00000B2D 81C6[D303]                  add si, opcodes
-   365                                  
-   366                                      ; restore the original opcode
-   367 00000B31 AC                          lodsb
-   368 00000B32 AA                          stosb
-   369                                  
-   370                                      ; send stop reply
-   371 00000B33 68[A303]                    push word stopreply
-   372 00000B36 E8CE00                      call send_reply
-   373                                      ; save register values
-   374 00000B39 E82200                      call save_registers
-   375                                      
-   376                                      ; wait for comisr to receive a packet
-   377 00000B3C FB                          sti
-   378                                  
-   379                                  trap_wait:
-   380 00000B3D 803E[E702]00                cmp byte [inprocessing], 0
-   381 00000B42 74F9                        je trap_wait
+   322 00000B10 60                          pusha
+   323 00000B11 1E                          push ds
+   324 00000B12 06                          push es
+   325                                  
+   326 00000B13 0E                          push cs
+   327 00000B14 1F                          pop ds
+   328                                  
+   329                                      ; adjust ip to re-execute the instruction after the breakpoint
+   330 00000B15 FF4E02                      dec word [bp + 2]
+   331                                  
+   332                                      ; restore the opcode so that the program can continue
+   333                                      ; ----- ideally check if es contains the same segment as childseg and fix ip if not
+   334 00000B18 8E4604                      mov es, [bp + 4]
+   335 00000B1B 8B7E02                      mov di, [bp + 2]
+   336                                      
+   337                                      ; set flags to indicate re-installation of breakpoint
+   338 00000B1E C606[CF03]01                mov byte [reinstallbrk], 1
+   339 00000B23 893E[D003]                  mov word [tempbrkaddr], di
+   340                                  
+   341                                      ; find the opcode in the opcodes array
+   342 00000B27 57                          push di
+   343 00000B28 E8A9FE                      call find_opcode
+   344 00000B2B 5E                          pop si
+   345                                  
+   346 00000B2C 81C6[D403]                  add si, opcodes
+   347                                  
+   348                                      ; restore the original opcode
+   349 00000B30 AC                          lodsb
+   350 00000B31 AA                          stosb
+   351                                  
+   352                                      ; send stop reply
+   353 00000B32 68[A403]                    push word stopreply
+   354 00000B35 E8D800                      call send_reply
+   355                                      ; save register values
+   356 00000B38 E82C00                      call save_registers
+   357                                      
+   358                                      ; wait for comisr to receive a packet
+   359 00000B3B FB                          sti
+   360                                  
+   361                                  trap_wait:
+   362 00000B3C 803E[E602]00                cmp byte [inprocessing], 0
+   363 00000B41 74F9                        je trap_wait
+   364                                  
+   365 00000B43 803E[E500]73                cmp byte [packet + 1], 's'
+   366 00000B48 740E                        je normal_step
+   367                                  
+   368 00000B4A 803E[E500]63                cmp byte [packet + 1], 'c'
+   369 00000B4F 7402                        je force_step
+   370                                  
+   371 00000B51 EBE9                        jmp trap_wait
+   372                                  
+   373                                      ; step in both cases. for continue set flag so that trapisr does not wait for another packet
+   374                                  force_step:
+   375 00000B53 C606[E802]01                mov byte [forcepause], 1
+   376                                  
+   377                                  normal_step:
+   378                                      ; clear the inprocessing flag and do not wait in wait_packet
+   379 00000B58 C606[E602]00                mov byte [inprocessing], 0
+   380                                      ; initialize trap flag for breakpoint restoration
+   381 00000B5D 814E060001                  or word [bp + 6], 0x0100
    382                                  
-   383 00000B44 803E[E600]73                cmp byte [packet + 1], 's'
-   384 00000B49 7409                        je force_step
-   385                                  
-   386 00000B4B 803E[E600]63                cmp byte [packet + 1], 'c'
-   387 00000B50 7402                        je force_step
-   388                                  
-   389 00000B52 EBE9                        jmp trap_wait
-   390                                  
-   391                                      ; if trap flag is set, program will always cause a trap
-   392                                      ; so restore the breakpoint and continue. no need for resetting flags
-   393                                  force_step:
-   394                                      ; initialize trap flag for breakpoint restoration
-   395 00000B54 814E060001                  or word [bp + 6], 0x0100
-   396                                  
-   397 00000B59 07                          pop es
-   398 00000B5A 1F                          pop ds
-   399 00000B5B 61                          popa
-   400                                  
-   401 00000B5C 5D                          pop bp
-   402 00000B5D CF                          iret
-   403                                  
-   404                                  save_registers:
-   405 00000B5E 50                          push ax
-   406                                  
-   407 00000B5F 8B46FE                      mov ax, [bp - 2]
-   408 00000B62 A3[C800]                    mov [regs + 0], ax  ; AX
-   409 00000B65 8B46F8                      mov ax, [bp - 8]
-   410 00000B68 A3[CA00]                    mov [regs + 2], ax  ; BX
-   411 00000B6B 8B46FC                      mov ax, [bp - 4]
-   412 00000B6E A3[CC00]                    mov [regs + 4], ax  ; CX
-   413 00000B71 8B46FA                      mov ax, [bp - 6]
-   414 00000B74 A3[CE00]                    mov [regs + 6], ax  ; DX
-   415 00000B77 8B46F2                      mov ax, [bp - 14]
-   416 00000B7A A3[D000]                    mov [regs + 8], ax  ; SI
-   417 00000B7D 8B46F0                      mov ax, [bp - 16]
-   418 00000B80 A3[D200]                    mov [regs + 10], ax ; DI
-   419 00000B83 8B4600                      mov ax, [bp]
-   420 00000B86 A3[D400]                    mov [regs + 12], ax ; BP
-   421 00000B89 8B46F6                      mov ax, [bp - 10]
-   422 00000B8C 83E808                      sub ax, 8
-   423 00000B8F A3[D600]                    mov [regs + 14], ax ; SP
-   424 00000B92 8B4602                      mov ax, [bp + 2]
-   425 00000B95 A3[D800]                    mov [regs + 16], ax ; IP
-   426 00000B98 8B4606                      mov ax, [bp + 6]
-   427 00000B9B A3[DA00]                    mov [regs + 18], ax ; FLAGS
-   428 00000B9E 8B4604                      mov ax, [bp + 4]
-   429 00000BA1 A3[DC00]                    mov [regs + 20], ax ; CS
-   430 00000BA4 8B46EE                      mov ax, [bp - 18]
-   431 00000BA7 A3[DE00]                    mov [regs + 22], ax ; DS
-   432 00000BAA 8B46EC                      mov ax, [bp - 20]
-   433 00000BAD A3[E000]                    mov [regs + 24], ax ; ES
-   434 00000BB0 8C16[E200]                  mov [regs + 26], ss ; SS
-   435                                  
-   436 00000BB4 58                          pop ax
-   437 00000BB5 C3                          ret
-   438                                  
+   383 00000B62 07                          pop es
+   384 00000B63 1F                          pop ds
+   385 00000B64 61                          popa
+   386                                  
+   387 00000B65 5D                          pop bp
+   388 00000B66 CF                          iret
+   389                                  
+   390                                  save_registers:
+   391 00000B67 50                          push ax
+   392                                  
+   393 00000B68 8B46FE                      mov ax, [bp - 2]
+   394 00000B6B A3[C700]                    mov [regs + 0], ax  ; AX
+   395 00000B6E 8B46F8                      mov ax, [bp - 8]
+   396 00000B71 A3[C900]                    mov [regs + 2], ax  ; BX
+   397 00000B74 8B46FC                      mov ax, [bp - 4]
+   398 00000B77 A3[CB00]                    mov [regs + 4], ax  ; CX
+   399 00000B7A 8B46FA                      mov ax, [bp - 6]
+   400 00000B7D A3[CD00]                    mov [regs + 6], ax  ; DX
+   401 00000B80 8B46F2                      mov ax, [bp - 14]
+   402 00000B83 A3[CF00]                    mov [regs + 8], ax  ; SI
+   403 00000B86 8B46F0                      mov ax, [bp - 16]
+   404 00000B89 A3[D100]                    mov [regs + 10], ax ; DI
+   405 00000B8C 8B4600                      mov ax, [bp]
+   406 00000B8F A3[D300]                    mov [regs + 12], ax ; BP
+   407 00000B92 8B46F6                      mov ax, [bp - 10]
+   408 00000B95 83E808                      sub ax, 8
+   409 00000B98 A3[D500]                    mov [regs + 14], ax ; SP
+   410 00000B9B 8B4602                      mov ax, [bp + 2]
+   411 00000B9E A3[D700]                    mov [regs + 16], ax ; IP
+   412 00000BA1 8B4606                      mov ax, [bp + 6]
+   413 00000BA4 A3[D900]                    mov [regs + 18], ax ; FLAGS
+   414 00000BA7 8B4604                      mov ax, [bp + 4]
+   415 00000BAA A3[DB00]                    mov [regs + 20], ax ; CS
+   416 00000BAD 8B46EE                      mov ax, [bp - 18]
+   417 00000BB0 A3[DD00]                    mov [regs + 22], ax ; DS
+   418 00000BB3 8B46EC                      mov ax, [bp - 20]
+   419 00000BB6 A3[DF00]                    mov [regs + 24], ax ; ES
+   420 00000BB9 8C16[E100]                  mov [regs + 26], ss ; SS
+   421                                  
+   422 00000BBD 58                          pop ax
+   423 00000BBE C3                          ret
+   424                                  
+   425                                  
+   426                                  send_byte:
+   427 00000BBF 55                          push bp
+   428 00000BC0 89E5                        mov bp, sp
+   429 00000BC2 50                          push ax
+   430 00000BC3 52                          push dx
+   431                                  
+   432                                  testline:
+   433 00000BC4 B403                        mov ah, 3
+   434 00000BC6 31D2                        xor dx, dx
+   435 00000BC8 CD14                        int 0x14
+   436                                  
+   437 00000BCA 80E420                      and ah, 32
+   438 00000BCD 74F5                        jz testline
    439                                  
-   440                                  send_byte:
-   441 00000BB6 55                          push bp
-   442 00000BB7 89E5                        mov bp, sp
-   443 00000BB9 50                          push ax
-   444 00000BBA 52                          push dx
-   445                                  
-   446                                  testline:
-   447 00000BBB B403                        mov ah, 3
-   448 00000BBD 31D2                        xor dx, dx
-   449 00000BBF CD14                        int 0x14
-   450                                  
-   451 00000BC1 80E420                      and ah, 32
-   452 00000BC4 74F5                        jz testline
-   453                                  
-   454 00000BC6 8A4604                      mov al, [bp + 4]
-   455 00000BC9 BAF803                      mov dx, 0x3F8
-   456 00000BCC EE                          out dx, al
-   457                                  
-   458 00000BCD 5A                          pop dx
-   459 00000BCE 58                          pop ax
-   460 00000BCF 5D                          pop bp
-   461 00000BD0 C20200                      ret 2
+   440 00000BCF 8A4604                      mov al, [bp + 4]
+   441 00000BD2 BAF803                      mov dx, 0x3F8
+   442 00000BD5 EE                          out dx, al
+   443                                  
+   444 00000BD6 5A                          pop dx
+   445 00000BD7 58                          pop ax
+   446 00000BD8 5D                          pop bp
+   447 00000BD9 C20200                      ret 2
+   448                                  
+   449                                  send_hex:
+   450                                      ; Parameters:
+   451                                      ; [bp + 4] - value to send
+   452                                      ; Returns:
+   453                                      ; [bp + 4] - checksum value
+   454                                  
+   455 00000BDC 55                          push bp
+   456 00000BDD 89E5                        mov bp, sp
+   457 00000BDF 50                          push ax
+   458 00000BE0 52                          push dx
+   459                                  
+   460 00000BE1 31C0                        xor ax, ax
+   461 00000BE3 31D2                        xor dx, dx
    462                                  
-   463                                  send_hex:
-   464                                      ; Parameters:
-   465                                      ; [bp + 4] - value to send
-   466                                      ; Returns:
-   467                                      ; [bp + 4] - checksum value
-   468                                  
-   469 00000BD3 55                          push bp
-   470 00000BD4 89E5                        mov bp, sp
-   471 00000BD6 50                          push ax
-   472 00000BD7 52                          push dx
+   463 00000BE5 B0F0                        mov al, 0F0h
+   464 00000BE7 224604                      and al, [bp + 4]
+   465 00000BEA C0E804                      shr al, 4
+   466                                  
+   467 00000BED 50                          push ax
+   468 00000BEE E82205                      call convert_to_ascii
+   469 00000BF1 58                          pop ax
+   470 00000BF2 00C2                        add dl, al
+   471 00000BF4 50                          push ax
+   472 00000BF5 E8C7FF                      call send_byte
    473                                  
-   474 00000BD8 31C0                        xor ax, ax
-   475 00000BDA 31D2                        xor dx, dx
-   476                                  
-   477 00000BDC B0F0                        mov al, 0F0h
-   478 00000BDE 224604                      and al, [bp + 4]
-   479 00000BE1 C0E804                      shr al, 4
-   480                                  
-   481 00000BE4 50                          push ax
-   482 00000BE5 E8B504                      call convert_to_ascii
-   483 00000BE8 58                          pop ax
-   484 00000BE9 00C2                        add dl, al
-   485 00000BEB 50                          push ax
-   486 00000BEC E8C7FF                      call send_byte
-   487                                  
-   488 00000BEF B80F00                      mov ax, 0xF
-   489 00000BF2 224604                      and al, [bp + 4]
-   490 00000BF5 50                          push ax
-   491 00000BF6 E8A404                      call convert_to_ascii
-   492 00000BF9 58                          pop ax
-   493 00000BFA 00C2                        add dl, al
-   494 00000BFC 50                          push ax
-   495 00000BFD E8B6FF                      call send_byte
-   496                                  
-   497 00000C00 885604                      mov [bp + 4], dl
+   474 00000BF8 B80F00                      mov ax, 0xF
+   475 00000BFB 224604                      and al, [bp + 4]
+   476 00000BFE 50                          push ax
+   477 00000BFF E81105                      call convert_to_ascii
+   478 00000C02 58                          pop ax
+   479 00000C03 00C2                        add dl, al
+   480 00000C05 50                          push ax
+   481 00000C06 E8B6FF                      call send_byte
+   482                                  
+   483 00000C09 885604                      mov [bp + 4], dl
+   484                                  
+   485 00000C0C 5A                          pop dx
+   486 00000C0D 58                          pop ax
+   487 00000C0E 5D                          pop bp
+   488 00000C0F C3                          ret
+   489                                  
+   490                                  send_reply:
+   491 00000C10 55                          push bp
+   492 00000C11 89E5                        mov bp, sp
+   493 00000C13 50                          push ax
+   494 00000C14 56                          push si
+   495                                      
+   496 00000C15 31C0                        xor ax, ax
+   497 00000C17 8B7604                      mov si, [bp + 4]
    498                                  
-   499 00000C03 5A                          pop dx
-   500 00000C04 58                          pop ax
-   501 00000C05 5D                          pop bp
-   502 00000C06 C3                          ret
+   499                                  replyloop:
+   500 00000C1A 8A04                        mov al, [si]
+   501 00000C1C 50                          push ax
+   502 00000C1D E89FFF                      call send_byte
    503                                  
-   504                                  send_reply:
-   505 00000C07 55                          push bp
-   506 00000C08 89E5                        mov bp, sp
-   507 00000C0A 50                          push ax
-   508 00000C0B 56                          push si
-   509                                      
-   510 00000C0C 31C0                        xor ax, ax
-   511 00000C0E 8B7604                      mov si, [bp + 4]
+   504 00000C20 46                          inc si
+   505 00000C21 803C00                      cmp byte [si], 0
+   506 00000C24 75F4                        jnz replyloop
+   507                                  
+   508 00000C26 5E                          pop si
+   509 00000C27 58                          pop ax
+   510 00000C28 5D                          pop bp
+   511 00000C29 C20200                      ret 2
    512                                  
-   513                                  replyloop:
-   514 00000C11 8A04                        mov al, [si]
-   515 00000C13 50                          push ax
-   516 00000C14 E89FFF                      call send_byte
-   517                                  
-   518 00000C17 46                          inc si
-   519 00000C18 803C00                      cmp byte [si], 0
-   520 00000C1B 75F4                        jnz replyloop
-   521                                  
-   522 00000C1D 5E                          pop si
-   523 00000C1E 58                          pop ax
-   524 00000C1F 5D                          pop bp
-   525 00000C20 C20200                      ret 2
-   526                                  
-   527                                  comisr:
-   528 00000C23 55                          push bp
-   529 00000C24 89E5                        mov bp, sp
-   530                                  
-   531 00000C26 60                          pusha
-   532 00000C27 1E                          push ds
-   533 00000C28 06                          push es
-   534                                  
-   535 00000C29 0E                          push cs
-   536 00000C2A 0E                          push cs
-   537 00000C2B 1F                          pop ds
-   538 00000C2C 07                          pop es
-   539                                  
-   540 00000C2D BAFA03                      mov dx, 0x3FA
-   541 00000C30 EC                          in al, dx
-   542 00000C31 240F                        and al, 0x0F
+   513                                  comisr:
+   514 00000C2C 55                          push bp
+   515 00000C2D 89E5                        mov bp, sp
+   516                                  
+   517 00000C2F 60                          pusha
+   518 00000C30 1E                          push ds
+   519 00000C31 06                          push es
+   520                                  
+   521 00000C32 0E                          push cs
+   522 00000C33 0E                          push cs
+   523 00000C34 1F                          pop ds
+   524 00000C35 07                          pop es
+   525                                  
+   526 00000C36 BAFA03                      mov dx, 0x3FA
+   527 00000C39 EC                          in al, dx
+   528 00000C3A 240F                        and al, 0x0F
+   529                                  
+   530 00000C3C 3C04                        cmp al, 4
+   531 00000C3E 754E                        jne nodata
+   532                                  
+   533 00000C40 BAF803                      mov dx, 0x3F8
+   534 00000C43 EC                          in al, dx
+   535                                  
+   536 00000C44 3C24                        cmp al, '$'
+   537 00000C46 750D                        jne insidepacket
+   538                                  
+   539 00000C48 C706[E402][E400]            mov word [packettail], packet
+   540 00000C4E C606[E300]00                mov byte [chksum], 0
+   541                                  
+   542 00000C53 EB0F                        jmp storepacket
    543                                  
-   544 00000C33 3C04                        cmp al, 4
-   545 00000C35 754E                        jne nodata
-   546                                  
-   547 00000C37 BAF803                      mov dx, 0x3F8
-   548 00000C3A EC                          in al, dx
-   549                                  
-   550 00000C3B 3C24                        cmp al, '$'
-   551 00000C3D 750D                        jne insidepacket
-   552                                  
-   553 00000C3F C706[E502][E500]            mov word [packettail], packet
-   554 00000C45 C606[E400]00                mov byte [chksum], 0
-   555                                  
-   556 00000C4A EB0F                        jmp storepacket
+   544                                  insidepacket:
+   545 00000C55 3C23                        cmp al, '#'
+   546 00000C57 7407                        je chksumstarted
+   547                                  
+   548 00000C59 803E[E300]00                cmp byte [chksum], 0
+   549 00000C5E 7404                        je storepacket
+   550                                  
+   551                                  chksumstarted:
+   552 00000C60 FE06[E300]                  inc byte [chksum]
+   553                                  
+   554                                  storepacket:
+   555 00000C64 8B1E[E402]                  mov bx, [packettail]
+   556 00000C68 8807                        mov [bx], al
    557                                  
-   558                                  insidepacket:
-   559 00000C4C 3C23                        cmp al, '#'
-   560 00000C4E 7407                        je chksumstarted
-   561                                  
-   562 00000C50 803E[E400]00                cmp byte [chksum], 0
-   563 00000C55 7404                        je storepacket
-   564                                  
-   565                                  chksumstarted:
-   566 00000C57 FE06[E400]                  inc byte [chksum]
+   558 00000C6A FF06[E402]                  inc word [packettail]
+   559                                  
+   560                                      ; check if packet is complete
+   561 00000C6E 803E[E300]03                cmp byte [chksum], 3
+   562 00000C73 7519                        jne nodata
+   563                                  
+   564                                      ; send acknowledgment
+   565 00000C75 6A2B                        push word '+'
+   566 00000C77 E845FF                      call send_byte
    567                                  
-   568                                  storepacket:
-   569 00000C5B 8B1E[E502]                  mov bx, [packettail]
-   570 00000C5F 8807                        mov [bx], al
-   571                                  
-   572 00000C61 FF06[E502]                  inc word [packettail]
-   573                                  
-   574                                      ; check if packet is complete
-   575 00000C65 803E[E400]03                cmp byte [chksum], 3
-   576 00000C6A 7519                        jne nodata
-   577                                  
-   578                                      ; send acknowledgment
-   579 00000C6C 6A2B                        push word '+'
-   580 00000C6E E845FF                      call send_byte
-   581                                  
-   582                                      ; setting packet processing flag
-   583 00000C71 C606[E702]01                mov byte [inprocessing], 1
-   584                                  
-   585 00000C76 6A14                        push word 20
-   586 00000C78 6A00                        push word 0
-   587 00000C7A 68[E500]                    push word packet
-   588 00000C7D 6A14                        push word 20
-   589 00000C7F E8BA04                      call printstr
+   568                                      ; setting packet processing flag
+   569 00000C7A C606[E602]01                mov byte [inprocessing], 1
+   570                                  
+   571 00000C7F 6A14                        push word 20
+   572 00000C81 6A00                        push word 0
+   573 00000C83 68[E400]                    push word packet
+   574 00000C86 6A14                        push word 20
+   575 00000C88 E82705                      call printstr
+   576                                  
+   577                                      ; process the received packet
+   578 00000C8B E80900                      call packet_processor
+   579                                  
+   580                                  nodata: 
+   581 00000C8E B020                        mov al, 0x20
+   582 00000C90 E620                        out 0x20, al
+   583                                  
+   584 00000C92 07                          pop es
+   585 00000C93 1F                          pop ds
+   586 00000C94 61                          popa
+   587                                      
+   588 00000C95 5D                          pop bp
+   589 00000C96 CF                          iret
    590                                  
-   591                                      ; process the received packet
-   592 00000C82 E80900                      call packet_processor
-   593                                  
-   594                                  nodata: 
-   595 00000C85 B020                        mov al, 0x20
-   596 00000C87 E620                        out 0x20, al
-   597                                  
-   598 00000C89 07                          pop es
-   599 00000C8A 1F                          pop ds
-   600 00000C8B 61                          popa
-   601                                      
-   602 00000C8C 5D                          pop bp
-   603 00000C8D CF                          iret
+   591                                  packet_processor:
+   592 00000C97 A0[E500]                    mov al, [packet + 1]
+   593 00000C9A BF[E902]                    mov di, availpacks
+   594 00000C9D 8B0E[0A03]                  mov cx, [packslength]
+   595                                  
+   596                                      ; check general packets
+   597 00000CA1 68[0C03]                    push word supportPack
+   598 00000CA4 E8A304                      call check_packet
+   599 00000CA7 7459                        jz gdb_support
+   600                                  
+   601 00000CA9 68[1703]                    push word contPack
+   602 00000CAC E89B04                      call check_packet
+   603 00000CAF 7459                        jz gdb_unknown
    604                                  
-   605                                  packet_processor:
-   606 00000C8E A0[E600]                    mov al, [packet + 1]
-   607 00000C91 BF[E802]                    mov di, availpacks
-   608 00000C94 8B0E[0903]                  mov cx, [packslength]
-   609                                  
-   610                                      ; check general packets
-   611 00000C98 68[0B03]                    push word supportPack
-   612 00000C9B E83604                      call check_packet
-   613 00000C9E 7459                        jz gdb_support
-   614                                  
-   615 00000CA0 68[1603]                    push word contPack
-   616 00000CA3 E82E04                      call check_packet
-   617 00000CA6 7459                        jz gdb_unknown
-   618                                  
-   619 00000CA8 68[1D03]                    push word mustreplyPack
-   620 00000CAB E82604                      call check_packet
-   621 00000CAE 7451                        jz gdb_unknown
-   622                                  
-   623 00000CB0 68[2D03]                    push word multiPack
-   624 00000CB3 E81E04                      call check_packet
-   625 00000CB6 7451                        jz gdb_ok
-   626                                  
-   627 00000CB8 68[3103]                    push word threadPack
-   628 00000CBB E81604                      call check_packet
-   629 00000CBE 7451                        jz gdb_single_thread
-   630                                  
-   631 00000CC0 68[3E03]                    push word endthreadPack
-   632 00000CC3 E80E04                      call check_packet
-   633 00000CC6 7451                        jz gdb_end_list
-   634                                  
-   635 00000CC8 68[4B03]                    push word attachedPack
-   636 00000CCB E80604                      call check_packet
-   637 00000CCE 7451                        jz gdb_child_process
-   638                                  
-   639 00000CD0 68[5503]                    push word currthreadPack
-   640 00000CD3 E8FE03                      call check_packet
-   641 00000CD6 7431                        jz gdb_ok
-   642                                  
-   643 00000CD8 68[5A03]                    push word querycurrPack
-   644 00000CDB E8F603                      call check_packet
-   645 00000CDE 7449                        jz gdb_curr_thread
+   605 00000CB1 68[1E03]                    push word mustreplyPack
+   606 00000CB4 E89304                      call check_packet
+   607 00000CB7 7451                        jz gdb_unknown
+   608                                  
+   609 00000CB9 68[2E03]                    push word multiPack
+   610 00000CBC E88B04                      call check_packet
+   611 00000CBF 7451                        jz gdb_ok
+   612                                  
+   613 00000CC1 68[3203]                    push word threadPack
+   614 00000CC4 E88304                      call check_packet
+   615 00000CC7 7451                        jz gdb_single_thread
+   616                                  
+   617 00000CC9 68[3F03]                    push word endthreadPack
+   618 00000CCC E87B04                      call check_packet
+   619 00000CCF 7451                        jz gdb_end_list
+   620                                  
+   621 00000CD1 68[4C03]                    push word attachedPack
+   622 00000CD4 E87304                      call check_packet
+   623 00000CD7 7451                        jz gdb_child_process
+   624                                  
+   625 00000CD9 68[5603]                    push word currthreadPack
+   626 00000CDC E86B04                      call check_packet
+   627 00000CDF 7431                        jz gdb_ok
+   628                                  
+   629 00000CE1 68[5B03]                    push word querycurrPack
+   630 00000CE4 E86304                      call check_packet
+   631 00000CE7 7449                        jz gdb_curr_thread
+   632                                  
+   633                                      ; find respective packet type
+   634 00000CE9 FC                          cld
+   635 00000CEA F2AE                        repne scasb
+   636 00000CEC 7402                        jz found_packet
+   637                                  
+   638 00000CEE EB1A                        jmp gdb_unknown
+   639                                  
+   640                                  found_packet:
+   641 00000CF0 81EF[EA02]                  sub di, availpacks + 1
+   642 00000CF4 D1E7                        shl di, 1
+   643 00000CF6 81C7[F402]                  add di, addresspacks
+   644                                  
+   645 00000CFA FF25                        jmp [di]
    646                                  
-   647                                      ; find respective packet type
-   648 00000CE0 FC                          cld
-   649 00000CE1 F2AE                        repne scasb
-   650 00000CE3 7402                        jz found_packet
-   651                                  
-   652 00000CE5 EB1A                        jmp gdb_unknown
-   653                                  
-   654                                  found_packet:
-   655 00000CE7 81EF[E902]                  sub di, availpacks + 1
-   656 00000CEB D1E7                        shl di, 1
-   657 00000CED 81C7[F302]                  add di, addresspacks
+   647                                  terminate_packet_processing:
+   648                                      ; toggle packet processing flag
+   649 00000CFC 8036[E602]01                xor byte [inprocessing], 1
+   650                                  
+   651 00000D01 C3                          ret
+   652                                  
+   653                                  gdb_support:
+   654 00000D02 68[5E03]                    push word supportreply
+   655 00000D05 E808FF                      call send_reply
+   656                                  
+   657 00000D08 EBF2                        jmp terminate_packet_processing
    658                                  
-   659 00000CF1 FF25                        jmp [di]
-   660                                  
-   661                                  terminate_packet_processing:
-   662                                      ; toggle packet processing flag
-   663 00000CF3 8036[E702]01                xor byte [inprocessing], 1
+   659                                  gdb_unknown:
+   660 00000D0A 68[9003]                    push word nothing
+   661 00000D0D E800FF                      call send_reply
+   662                                  
+   663 00000D10 EBEA                        jmp terminate_packet_processing
    664                                  
-   665 00000CF8 C3                          ret
-   666                                  
-   667                                  gdb_support:
-   668 00000CF9 68[5D03]                    push word supportreply
-   669 00000CFC E808FF                      call send_reply
+   665                                  gdb_ok:
+   666 00000D12 68[9503]                    push word okreply
+   667 00000D15 E8F8FE                      call send_reply
+   668                                  
+   669 00000D18 EBE2                        jmp terminate_packet_processing
    670                                  
-   671 00000CFF EBF2                        jmp terminate_packet_processing
-   672                                  
-   673                                  gdb_unknown:
-   674 00000D01 68[8F03]                    push word nothing
-   675 00000D04 E800FF                      call send_reply
+   671                                  gdb_single_thread:
+   672 00000D1A 68[AC03]                    push word singletreply
+   673 00000D1D E8F0FE                      call send_reply
+   674                                  
+   675 00000D20 EBDA                        jmp terminate_packet_processing
    676                                  
-   677 00000D07 EBEA                        jmp terminate_packet_processing
-   678                                  
-   679                                  gdb_ok:
-   680 00000D09 68[9403]                    push word okreply
-   681 00000D0C E8F8FE                      call send_reply
+   677                                  gdb_end_list:
+   678 00000D22 68[B303]                    push word endlistreply
+   679 00000D25 E8E8FE                      call send_reply
+   680                                  
+   681 00000D28 EBD2                        jmp terminate_packet_processing
    682                                  
-   683 00000D0F EBE2                        jmp terminate_packet_processing
-   684                                  
-   685                                  gdb_single_thread:
-   686 00000D11 68[AB03]                    push word singletreply
-   687 00000D14 E8F0FE                      call send_reply
+   683                                  gdb_child_process:
+   684 00000D2A 68[B903]                    push word childkillreply
+   685 00000D2D E8E0FE                      call send_reply
+   686                                  
+   687 00000D30 EBCA                        jmp terminate_packet_processing
    688                                  
-   689 00000D17 EBDA                        jmp terminate_packet_processing
-   690                                  
-   691                                  gdb_end_list:
-   692 00000D19 68[B203]                    push word endlistreply
-   693 00000D1C E8E8FE                      call send_reply
+   689                                  gdb_curr_thread:
+   690 00000D32 68[BF03]                    push word currthreply
+   691 00000D35 E8D8FE                      call send_reply
+   692                                  
+   693 00000D38 EBC2                        jmp terminate_packet_processing
    694                                  
-   695 00000D1F EBD2                        jmp terminate_packet_processing
-   696                                  
-   697                                  gdb_child_process:
-   698 00000D21 68[B803]                    push word childkillreply
-   699 00000D24 E8E0FE                      call send_reply
+   695                                  gdb_why:
+   696 00000D3A 68[A403]                    push word stopreply
+   697 00000D3D E8D0FE                      call send_reply
+   698                                  
+   699 00000D40 EBBA                        jmp terminate_packet_processing
    700                                  
-   701 00000D27 EBCA                        jmp terminate_packet_processing
-   702                                  
-   703                                  gdb_curr_thread:
-   704 00000D29 68[BE03]                    push word currthreply
-   705 00000D2C E8D8FE                      call send_reply
-   706                                  
-   707 00000D2F EBC2                        jmp terminate_packet_processing
+   701                                  gdb_kill:
+   702                                      ; no need to send reply
+   703 00000D42 C606[E702]00                mov byte [startprogram], 0
+   704                                  
+   705                                      ; terminate the program in child's context
+   706 00000D47 B8004C                      mov ax, 0x4c00
+   707 00000D4A CD21                        int 0x21
    708                                  
-   709                                  gdb_why:
-   710 00000D31 68[A303]                    push word stopreply
-   711 00000D34 E8D0FE                      call send_reply
-   712                                  
-   713 00000D37 EBBA                        jmp terminate_packet_processing
+   709                                  gdb_debugger:
+   710                                      ; toggle flag to start the child program's execution
+   711 00000D4C C606[E702]01                mov byte [startprogram], 1
+   712                                      ; toggle flag beforehand so that it remains on and is handle by debugger isrs
+   713 00000D51 8036[E602]01                xor byte [inprocessing], 1
    714                                  
-   715                                  gdb_kill:
-   716                                      ; no need to send reply
-   717 00000D39 C606[9700]00                mov byte [firstpause], 0
-   718                                  
-   719                                      ; terminate the program in child's context
-   720 00000D3E B8004C                      mov ax, 0x4c00
-   721 00000D41 CD21                        int 0x21
-   722                                  
-   723                                  gdb_debugger:
-   724                                      ; toggle flag beforehand so that it remains on and is handle by debugger isrs
-   725 00000D43 8036[E702]01                xor byte [inprocessing], 1
-   726                                  
-   727 00000D48 EBA9                        jmp terminate_packet_processing
-   728                                  
-   729                                  gdb_extract_register:
-   730 00000D4A 68[E700]                    push word packet + 2
-   731 00000D4D 6A01                        push word 1
-   732 00000D4F E80803                      call extract_hex
-   733 00000D52 5F                          pop di
-   734 00000D53 58                          pop ax
+   715 00000D56 EBA4                        jmp terminate_packet_processing
+   716                                  
+   717                                  gdb_extract_register:
+   718 00000D58 68[E600]                    push word packet + 2
+   719 00000D5B 6A01                        push word 1
+   720 00000D5D E87003                      call extract_hex
+   721 00000D60 5F                          pop di
+   722 00000D61 58                          pop ax
+   723                                  
+   724 00000D62 D1E7                        shl di, 1
+   725 00000D64 31C0                        xor ax, ax
+   726 00000D66 31DB                        xor bx, bx
+   727                                  
+   728 00000D68 6A24                        push word '$'
+   729 00000D6A E852FE                      call send_byte
+   730                                  
+   731 00000D6D 8A85[C700]                  mov al, [regs + di]
+   732 00000D71 50                          push ax
+   733 00000D72 E867FE                      call send_hex
+   734 00000D75 5B                          pop bx
    735                                  
-   736 00000D54 D1E7                        shl di, 1
-   737 00000D56 31C0                        xor ax, ax
-   738 00000D58 31DB                        xor bx, bx
-   739                                  
-   740 00000D5A 6A24                        push word '$'
-   741 00000D5C E857FE                      call send_byte
+   736 00000D76 8A85[C800]                  mov al, [regs + di + 1]
+   737 00000D7A 50                          push ax
+   738 00000D7B E85EFE                      call send_hex
+   739 00000D7E 58                          pop ax
+   740                                  
+   741 00000D7F 00D8                        add al, bl 
    742                                  
-   743 00000D5F 8A85[C800]                  mov al, [regs + di]
-   744 00000D63 50                          push ax
-   745 00000D64 E86CFE                      call send_hex
-   746 00000D67 5B                          pop bx
-   747                                  
-   748 00000D68 8A85[C900]                  mov al, [regs + di + 1]
-   749 00000D6C 50                          push ax
-   750 00000D6D E863FE                      call send_hex
-   751 00000D70 58                          pop ax
-   752                                  
-   753 00000D71 00D8                        add al, bl 
+   743 00000D81 6A23                        push word '#'
+   744 00000D83 E839FE                      call send_byte
+   745 00000D86 50                          push ax
+   746 00000D87 E852FE                      call send_hex
+   747 00000D8A 58                          pop ax
+   748                                  
+   749 00000D8B E96EFF                      jmp terminate_packet_processing
+   750                                  
+   751                                  gdb_send_registers:
+   752 00000D8E 6A24                        push word '$'
+   753 00000D90 E82CFE                      call send_byte
    754                                  
-   755 00000D73 6A23                        push word '#'
-   756 00000D75 E83EFE                      call send_byte
-   757 00000D78 50                          push ax
-   758 00000D79 E857FE                      call send_hex
-   759 00000D7C 58                          pop ax
-   760                                  
-   761 00000D7D E973FF                      jmp terminate_packet_processing
-   762                                  
-   763                                  gdb_send_registers:
-   764 00000D80 6A24                        push word '$'
-   765 00000D82 E831FE                      call send_byte
-   766                                  
-   767 00000D85 31C0                        xor ax, ax
-   768 00000D87 31DB                        xor bx, bx
-   769 00000D89 31C9                        xor cx, cx
-   770 00000D8B 31D2                        xor dx, dx
+   755 00000D93 31C0                        xor ax, ax
+   756 00000D95 31DB                        xor bx, bx
+   757 00000D97 31C9                        xor cx, cx
+   758 00000D99 31D2                        xor dx, dx
+   759                                  
+   760                                  nextreg:
+   761 00000D9B 8A87[C700]                  mov al, [regs + bx]
+   762 00000D9F 50                          push ax
+   763 00000DA0 E839FE                      call send_hex
+   764 00000DA3 58                          pop ax
+   765                                      
+   766 00000DA4 00C2                        add dl, al
+   767 00000DA6 43                          inc bx
+   768                                  
+   769 00000DA7 83FB1C                      cmp bx, 14 * 2
+   770 00000DAA 75EF                        jne nextreg
    771                                  
-   772                                  nextreg:
-   773 00000D8D 8A87[C800]                  mov al, [regs + bx]
-   774 00000D91 50                          push ax
-   775 00000D92 E83EFE                      call send_hex
-   776 00000D95 58                          pop ax
-   777                                      
-   778 00000D96 00C2                        add dl, al
-   779 00000D98 43                          inc bx
+   772                                      ; checksum
+   773 00000DAC 6A23                        push word '#'
+   774 00000DAE E80EFE                      call send_byte
+   775 00000DB1 52                          push dx
+   776 00000DB2 E827FE                      call send_hex
+   777 00000DB5 5A                          pop dx
+   778                                  
+   779 00000DB6 E943FF                      jmp terminate_packet_processing
    780                                  
-   781 00000D99 83FB1C                      cmp bx, 14 * 2
-   782 00000D9C 75EF                        jne nextreg
-   783                                  
-   784                                      ; checksum
-   785 00000D9E 6A23                        push word '#'
-   786 00000DA0 E813FE                      call send_byte
-   787 00000DA3 52                          push dx
-   788 00000DA4 E82CFE                      call send_hex
-   789 00000DA7 5A                          pop dx
-   790                                  
-   791 00000DA8 E948FF                      jmp terminate_packet_processing
-   792                                  
-   793                                  ; fix this function call to accept seg:off pair
-   794                                  gdb_set_breakpoint:
-   795 00000DAB B02C                        mov al, ','
-   796 00000DAD BF[E900]                    mov di, packet + 4
-   797 00000DB0 B90A00                      mov cx, 10
+   781                                  ; fix this function call to accept seg:off pair
+   782                                  gdb_set_breakpoint:
+   783 00000DB9 B02C                        mov al, ','
+   784 00000DBB BF[E800]                    mov di, packet + 4
+   785 00000DBE B90A00                      mov cx, 10
+   786                                  
+   787 00000DC1 FC                          cld 
+   788 00000DC2 F2AE                        repne scasb
+   789                                  
+   790 00000DC4 81EF[E900]                  sub di, packet + 5
+   791                                  
+   792 00000DC8 68[E800]                    push word packet + 4
+   793 00000DCB 57                          push di
+   794 00000DCC E80103                      call extract_hex
+   795 00000DCF E85403                      call convert_physical_to_logical
+   796 00000DD2 5F                          pop di
+   797 00000DD3 58                          pop ax
    798                                  
-   799 00000DB3 FC                          cld 
-   800 00000DB4 F2AE                        repne scasb
+   799 00000DD4 C1E004                      shl ax, 4
+   800 00000DD7 01F8                        add ax, di
    801                                  
-   802 00000DB6 81EF[EA00]                  sub di, packet + 5
-   803                                  
-   804 00000DBA 68[E900]                    push word packet + 4
-   805 00000DBD 57                          push di
-   806 00000DBE E89902                      call extract_hex
-   807 00000DC1 E8EC02                      call convert_physical_to_logical
-   808 00000DC4 5F                          pop di
-   809 00000DC5 58                          pop ax
+   802 00000DD9 50                          push ax
+   803 00000DDA E827FC                      call push_opcode
+   804 00000DDD 7209                        jc set_breakpoint_error
+   805                                  
+   806 00000DDF 68[9503]                    push word okreply
+   807 00000DE2 E82BFE                      call send_reply
+   808                                  
+   809 00000DE5 E914FF                      jmp terminate_packet_processing
    810                                  
-   811 00000DC6 C1E004                      shl ax, 4
-   812 00000DC9 01F8                        add ax, di
-   813                                  
-   814 00000DCB 50                          push ax
-   815 00000DCC E834FC                      call push_opcode
-   816 00000DCF 7209                        jc set_breakpoint_error
-   817                                  
-   818 00000DD1 68[9403]                    push word okreply
-   819 00000DD4 E830FE                      call send_reply
-   820                                  
-   821 00000DD7 E919FF                      jmp terminate_packet_processing
+   811                                  set_breakpoint_error:
+   812 00000DE8 68[9C03]                    push word errorreply
+   813 00000DEB E822FE                      call send_reply
+   814                                  
+   815 00000DEE E90BFF                      jmp terminate_packet_processing
+   816                                  
+   817                                  ; this as well
+   818                                  gdb_remove_breakpoint:
+   819 00000DF1 B02C                        mov al, ','
+   820 00000DF3 BF[E800]                    mov di, packet + 4
+   821 00000DF6 B90A00                      mov cx, 10
    822                                  
-   823                                  set_breakpoint_error:
-   824 00000DDA 68[9B03]                    push word errorreply
-   825 00000DDD E827FE                      call send_reply
-   826                                  
-   827 00000DE0 E910FF                      jmp terminate_packet_processing
-   828                                  
-   829                                  ; this as well
-   830                                  gdb_remove_breakpoint:
-   831 00000DE3 B02C                        mov al, ','
-   832 00000DE5 BF[E900]                    mov di, packet + 4
-   833 00000DE8 B90A00                      mov cx, 10
+   823 00000DF9 FC                          cld 
+   824 00000DFA F2AE                        repne scasb
+   825                                  
+   826 00000DFC 81EF[E900]                  sub di, packet + 5
+   827                                  
+   828 00000E00 68[E800]                    push word packet + 4
+   829 00000E03 57                          push di
+   830 00000E04 E8C902                      call extract_hex
+   831 00000E07 E81C03                      call convert_physical_to_logical
+   832 00000E0A 5F                          pop di
+   833 00000E0B 58                          pop ax
    834                                  
-   835 00000DEB FC                          cld 
-   836 00000DEC F2AE                        repne scasb
+   835 00000E0C C1E004                      shl ax, 4
+   836 00000E0F 01F8                        add ax, di
    837                                  
-   838 00000DEE 81EF[EA00]                  sub di, packet + 5
-   839                                  
-   840 00000DF2 68[E900]                    push word packet + 4
-   841 00000DF5 57                          push di
-   842 00000DF6 E86102                      call extract_hex
-   843 00000DF9 E8B402                      call convert_physical_to_logical
-   844 00000DFC 5F                          pop di
-   845 00000DFD 58                          pop ax
+   838 00000E11 50                          push ax
+   839 00000E12 E83CFC                      call remove_opcode
+   840 00000E15 7209                        jc remove_breakpoint_error
+   841                                  
+   842 00000E17 68[9503]                    push word okreply
+   843 00000E1A E8F3FD                      call send_reply
+   844                                  
+   845 00000E1D E9DCFE                      jmp terminate_packet_processing
    846                                  
-   847 00000DFE C1E004                      shl ax, 4
-   848 00000E01 01F8                        add ax, di
-   849                                  
-   850 00000E03 50                          push ax
-   851 00000E04 E849FC                      call remove_opcode
-   852 00000E07 7209                        jc remove_breakpoint_error
-   853                                  
-   854 00000E09 68[9403]                    push word okreply
-   855 00000E0C E8F8FD                      call send_reply
-   856                                  
-   857 00000E0F E9E1FE                      jmp terminate_packet_processing
+   847                                  remove_breakpoint_error:
+   848 00000E20 68[9C03]                    push word errorreply
+   849 00000E23 E8EAFD                      call send_reply
+   850                                  
+   851 00000E26 E9D3FE                      jmp terminate_packet_processing
+   852                                  
+   853                                  gdb_read_memory:
+   854                                      ; extract length of address in packet
+   855 00000E29 B02C                        mov al, ','
+   856 00000E2B BF[E600]                    mov di, packet + 2
+   857 00000E2E B90A00                      mov cx, 10
    858                                  
-   859                                  remove_breakpoint_error:
-   860 00000E12 68[9B03]                    push word errorreply
-   861 00000E15 E8EFFD                      call send_reply
-   862                                  
-   863 00000E18 E9D8FE                      jmp terminate_packet_processing
-   864                                  
-   865                                  gdb_read_memory:
-   866                                      ; extract length of address in packet
-   867 00000E1B B02C                        mov al, ','
-   868 00000E1D BF[E700]                    mov di, packet + 2
-   869 00000E20 B90A00                      mov cx, 10
-   870                                  
-   871 00000E23 FC                          cld
-   872 00000E24 F2AE                        repne scasb
-   873                                  
-   874                                      ; length in bx
-   875 00000E26 89FB                        mov bx, di
-   876 00000E28 81EB[E800]                  sub bx, packet + 3
-   877                                  
-   878                                      ; extract length of number of bytes to read
-   879 00000E2C B023                        mov al, '#'
-   880 00000E2E B90A00                      mov cx, 10
-   881                                  
-   882 00000E31 F2AE                        repne scasb
-   883                                  
-   884                                      ; length in cx
-   885 00000E33 81EF[E900]                  sub di, packet + 4
-   886 00000E37 29DF                        sub di, bx
-   887 00000E39 89F9                        mov cx, di
-   888                                  
-   889                                      ; extract and convert 32 bit address to segment:offset
-   890 00000E3B 68[E700]                    push word packet + 2
-   891 00000E3E 53                          push bx
-   892 00000E3F E81802                      call extract_hex
-   893 00000E42 E86B02                      call convert_physical_to_logical
-   894 00000E45 5F                          pop di
-   895 00000E46 07                          pop es
-   896                                  
-   897                                      ; extract number of bytes to read
-   898 00000E47 B8[E800]                    mov ax, packet + 3
-   899 00000E4A 01D8                        add ax, bx
-   900                                      
-   901 00000E4C 50                          push ax
-   902 00000E4D 51                          push cx
-   903 00000E4E E80902                      call extract_hex
-   904 00000E51 59                          pop cx
-   905 00000E52 58                          pop ax
-   906                                  
-   907 00000E53 31C0                        xor ax, ax
-   908 00000E55 31D2                        xor dx, dx
-   909                                      ; mov es, [childseg]        ; dunnno what to do with this
+   859 00000E31 FC                          cld
+   860 00000E32 F2AE                        repne scasb
+   861                                  
+   862                                      ; length in bx
+   863 00000E34 89FB                        mov bx, di
+   864 00000E36 81EB[E700]                  sub bx, packet + 3
+   865                                  
+   866                                      ; extract length of number of bytes to read
+   867 00000E3A B023                        mov al, '#'
+   868 00000E3C B90A00                      mov cx, 10
+   869                                  
+   870 00000E3F F2AE                        repne scasb
+   871                                  
+   872                                      ; length in cx
+   873 00000E41 81EF[E800]                  sub di, packet + 4
+   874 00000E45 29DF                        sub di, bx
+   875 00000E47 89F9                        mov cx, di
+   876                                  
+   877                                      ; extract and convert 32 bit address to segment:offset
+   878 00000E49 68[E600]                    push word packet + 2
+   879 00000E4C 53                          push bx
+   880 00000E4D E88002                      call extract_hex
+   881 00000E50 E8D302                      call convert_physical_to_logical
+   882 00000E53 5F                          pop di
+   883 00000E54 07                          pop es
+   884                                  
+   885                                      ; extract number of bytes to read
+   886 00000E55 B8[E700]                    mov ax, packet + 3
+   887 00000E58 01D8                        add ax, bx
+   888                                      
+   889 00000E5A 50                          push ax
+   890 00000E5B 51                          push cx
+   891 00000E5C E87102                      call extract_hex
+   892 00000E5F 59                          pop cx
+   893 00000E60 58                          pop ax
+   894                                  
+   895 00000E61 31C0                        xor ax, ax
+   896 00000E63 31D2                        xor dx, dx
+   897                                      ; mov es, [childseg]        ; dunnno what to do with this
+   898                                  
+   899 00000E65 6A24                        push word '$'
+   900 00000E67 E855FD                      call send_byte
+   901                                  
+   902                                  read_memory_loop:
+   903 00000E6A 268A05                      mov al, [es:di]
+   904 00000E6D 50                          push ax
+   905 00000E6E E86BFD                      call send_hex
+   906 00000E71 58                          pop ax
+   907                                  
+   908 00000E72 00C2                        add dl, al
+   909 00000E74 47                          inc di
    910                                  
-   911 00000E57 6A24                        push word '$'
-   912 00000E59 E85AFD                      call send_byte
-   913                                  
-   914                                  read_memory_loop:
-   915 00000E5C 268A05                      mov al, [es:di]
-   916 00000E5F 50                          push ax
-   917 00000E60 E870FD                      call send_hex
-   918 00000E63 58                          pop ax
-   919                                  
-   920 00000E64 00C2                        add dl, al
-   921 00000E66 47                          inc di
-   922                                  
-   923                                      ; handling segment wrap for large memory reads
-   924 00000E67 83FF00                      cmp di, 0
-   925 00000E6A 7507                        jne no_wrap_in_memory
-   926                                  
-   927 00000E6C 8CC0                        mov ax, es
-   928 00000E6E 050010                      add ax, 0x1000
-   929 00000E71 8EC0                        mov es, ax
-   930                                  
-   931                                  no_wrap_in_memory:
-   932 00000E73 E2E7                        loop read_memory_loop
-   933                                  
-   934 00000E75 6A23                        push word '#'
-   935 00000E77 E83CFD                      call send_byte
-   936 00000E7A 52                          push dx
-   937 00000E7B E855FD                      call send_hex
-   938 00000E7E 5A                          pop dx
+   911                                      ; handling segment wrap for large memory reads
+   912 00000E75 83FF00                      cmp di, 0
+   913 00000E78 7507                        jne no_wrap_in_memory
+   914                                  
+   915 00000E7A 8CC0                        mov ax, es
+   916 00000E7C 050010                      add ax, 0x1000
+   917 00000E7F 8EC0                        mov es, ax
+   918                                  
+   919                                  no_wrap_in_memory:
+   920 00000E81 E2E7                        loop read_memory_loop
+   921                                  
+   922 00000E83 6A23                        push word '#'
+   923 00000E85 E837FD                      call send_byte
+   924 00000E88 52                          push dx
+   925 00000E89 E850FD                      call send_hex
+   926 00000E8C 5A                          pop dx
+   927                                  
+   928 00000E8D E96CFE                      jmp terminate_packet_processing
+   929                                  
+   930                                  ; check this
+   931                                  gdb_write_memory:
+   932                                      ; extract length of address in packet
+   933 00000E90 B02C                        mov al, ','
+   934 00000E92 BF[E600]                    mov di, packet + 2
+   935 00000E95 B90A00                      mov cx, 10
+   936                                  
+   937 00000E98 FC                          cld
+   938 00000E99 F2AE                        repne scasb
    939                                  
-   940 00000E7F E971FE                      jmp terminate_packet_processing
-   941                                  
-   942                                  ; check this
-   943                                  gdb_write_memory:
-   944                                      ; extract length of address in packet
-   945 00000E82 B02C                        mov al, ','
-   946 00000E84 BF[E700]                    mov di, packet + 2
-   947 00000E87 B90A00                      mov cx, 10
-   948                                  
-   949 00000E8A FC                          cld
-   950 00000E8B F2AE                        repne scasb
-   951                                  
-   952                                      ; length in bx
-   953 00000E8D 89FB                        mov bx, di
-   954 00000E8F 81EB[E800]                  sub bx, packet + 3
+   940                                      ; length in bx
+   941 00000E9B 89FB                        mov bx, di
+   942 00000E9D 81EB[E700]                  sub bx, packet + 3
+   943                                  
+   944                                      ; extract length of number of bytes to write
+   945 00000EA1 B03A                        mov al, ':'
+   946 00000EA3 B90A00                      mov cx, 10
+   947                                  
+   948 00000EA6 F2AE                        repne scasb
+   949                                  
+   950                                      ; length in cx and pointer to data in si
+   951 00000EA8 89FE                        mov si, di
+   952 00000EAA 81EF[E800]                  sub di, packet + 4
+   953 00000EAE 29DF                        sub di, bx
+   954 00000EB0 89F9                        mov cx, di
    955                                  
-   956                                      ; extract length of number of bytes to write
-   957 00000E93 B03A                        mov al, ':'
-   958 00000E95 B90A00                      mov cx, 10
-   959                                  
-   960 00000E98 F2AE                        repne scasb
-   961                                  
-   962                                      ; length in cx and pointer to data in si
-   963 00000E9A 89FE                        mov si, di
-   964 00000E9C 81EF[E900]                  sub di, packet + 4
-   965 00000EA0 29DF                        sub di, bx
-   966 00000EA2 89F9                        mov cx, di
+   956                                      ; extract and convert 32 bit address to segment:offset
+   957 00000EB2 68[E600]                    push word packet + 2
+   958 00000EB5 53                          push bx
+   959 00000EB6 E81702                      call extract_hex
+   960 00000EB9 E86A02                      call convert_physical_to_logical
+   961 00000EBC 5F                          pop di
+   962 00000EBD 07                          pop es
+   963                                  
+   964                                      ; extract number of bytes to write
+   965 00000EBE B8[E700]                    mov ax, packet + 3
+   966 00000EC1 01D8                        add ax, bx
    967                                  
-   968                                      ; extract and convert 32 bit address to segment:offset
-   969 00000EA4 68[E700]                    push word packet + 2
-   970 00000EA7 53                          push bx
-   971 00000EA8 E8AF01                      call extract_hex
-   972 00000EAB E80202                      call convert_physical_to_logical
-   973 00000EAE 5F                          pop di
-   974 00000EAF 07                          pop es
-   975                                  
-   976                                      ; extract number of bytes to write
-   977 00000EB0 B8[E800]                    mov ax, packet + 3
-   978 00000EB3 01D8                        add ax, bx
-   979                                  
-   980 00000EB5 50                          push ax
-   981 00000EB6 51                          push cx
-   982 00000EB7 E8A001                      call extract_hex
-   983 00000EBA 59                          pop cx
-   984 00000EBB 58                          pop ax
+   968 00000EC3 50                          push ax
+   969 00000EC4 51                          push cx
+   970 00000EC5 E80802                      call extract_hex
+   971 00000EC8 59                          pop cx
+   972 00000EC9 58                          pop ax
+   973                                  
+   974 00000ECA 31C0                        xor ax, ax
+   975 00000ECC 31D2                        xor dx, dx
+   976 00000ECE 89F3                        mov bx, si
+   977                                      ; mov es, [childseg]
+   978                                  
+   979                                  write_memory_loop:
+   980 00000ED0 53                          push bx
+   981 00000ED1 6A02                        push word 2
+   982 00000ED3 E8FA01                      call extract_hex
+   983 00000ED6 58                          pop ax
+   984 00000ED7 5E                          pop si
    985                                  
-   986 00000EBC 31C0                        xor ax, ax
-   987 00000EBE 31D2                        xor dx, dx
-   988 00000EC0 89F3                        mov bx, si
-   989                                      ; mov es, [childseg]
+   986 00000ED8 AA                          stosb
+   987 00000ED9 43                          inc bx
+   988                                  
+   989 00000EDA E2F4                        loop write_memory_loop
    990                                  
-   991                                  write_memory_loop:
-   992 00000EC2 53                          push bx
-   993 00000EC3 6A02                        push word 2
-   994 00000EC5 E89201                      call extract_hex
-   995 00000EC8 58                          pop ax
-   996 00000EC9 5E                          pop si
+   991 00000EDC E933FE                      jmp gdb_ok
+   992                                  
+   993                                  
+   994                                  hookISR: 
+   995 00000EDF 50                          push ax
+   996 00000EE0 06                          push es
    997                                  
-   998 00000ECA AA                          stosb
-   999 00000ECB 43                          inc bx
+   998 00000EE1 31C0                        xor ax, ax
+   999 00000EE3 8EC0                        mov es, ax
   1000                                  
-  1001 00000ECC E2F4                        loop write_memory_loop
+  1001                                      ; saving original ISRs
   1002                                  
-  1003 00000ECE E938FE                      jmp gdb_ok
-  1004                                  
-  1005                                  
-  1006                                  hookISR: 
-  1007 00000ED1 50                          push ax
-  1008 00000ED2 06                          push es
-  1009                                  
-  1010 00000ED3 31C0                        xor ax, ax
-  1011 00000ED5 8EC0                        mov es, ax
-  1012                                  
-  1013                                      ; saving original ISRs
-  1014                                  
-  1015                                      ; single step trap
-  1016                                      ; (int 1h)
-  1017 00000ED7 26A10400                    mov ax, [es:0x1 * 4]
-  1018 00000EDB A3[0500]                    mov [oldtrapisr], ax
-  1019 00000EDE 26A10600                    mov ax, [es:0x1 * 4 + 2]
-  1020 00000EE2 A3[0700]                    mov [oldtrapisr + 2], ax
-  1021                                      ; breakpoint trap
-  1022                                      ; (int 3h)
-  1023 00000EE5 26A10C00                    mov ax, [es:0x3 * 4]
-  1024 00000EE9 A3[0900]                    mov [oldbrkisr], ax
-  1025 00000EEC 26A10E00                    mov ax, [es:0x3 * 4 + 2]
-  1026 00000EF0 A3[0B00]                    mov [oldbrkisr + 2], ax
-  1027                                      ; COM port interrupt
-  1028                                      ; (int 0Ch)
-  1029 00000EF3 26A13000                    mov ax, [es:0xC * 4]
-  1030 00000EF7 A3[0D00]                    mov [oldcomisr], ax
-  1031 00000EFA 26A13200                    mov ax, [es:0xC * 4 + 2]
-  1032 00000EFE A3[0F00]                    mov [oldcomisr + 2], ax
-  1033                                      ; return to parent process interrupt
-  1034                                      ; (int 22h)
-  1035 00000F01 26A18800                    mov ax, [es:0x22 * 4]
-  1036 00000F05 A3[1100]                    mov [oldretisr], ax
-  1037 00000F08 26A18A00                    mov ax, [es:0x22 * 4 + 2]
-  1038 00000F0C A3[1300]                    mov [oldretisr + 2], ax
-  1039                                  
-  1040                                      ; hooking ISRs
-  1041                                  
-  1042 00000F0F FA                          cli
-  1043                                  
-  1044                                      ; single step trap
-  1045 00000F10 26C7060400[A90A]            mov word [es:0x1 * 4], trapisr
-  1046 00000F17 268C0E0600                  mov [es:0x1 * 4 + 2], cs
-  1047                                      ; breakpoint trap
-  1048 00000F1C 26C7060C00[0E0B]            mov word [es:0x3 * 4], brkisr
-  1049 00000F23 268C0E0E00                  mov [es:0x3 * 4 + 2], cs
-  1050                                      ; COM port interrupt
-  1051 00000F28 26C7063000[230C]            mov word [es:0xC * 4], comisr
-  1052 00000F2F 268C0E3200                  mov [es:0xC * 4 + 2], cs
-  1053                                      ; return to parent process interrupt
-  1054 00000F34 26C7068800[3510]            mov word [es:0x22 * 4], return_to_parent
-  1055 00000F3B 268C0E8A00                  mov [es:0x22 * 4 + 2], cs
-  1056                                  
-  1057                                      ; enabling interrupts
-  1058                                  
-  1059                                      ; enable OUT2
-  1060 00000F40 BAFC03                      mov dx, MCR
-  1061 00000F43 EC                          in al, dx
-  1062 00000F44 0C08                        or al, 8 ; enable bit 3 (OUT2)
-  1063 00000F46 EE                          out dx, al
-  1064                                      ; enable IER
-  1065 00000F47 BAF903                      mov dx, IER
-  1066 00000F4A EC                          in al, dx
-  1067 00000F4B 0C01                        or al, 1
-  1068 00000F4D EE                          out dx, al
-  1069                                      ; enable PIC 
-  1070 00000F4E E421                        in al, 0x21
-  1071 00000F50 24EF                        and al, 0xEF
-  1072 00000F52 E621                        out 0x21, al
-  1073                                  
-  1074 00000F54 FB                          sti
+  1003                                      ; single step trap
+  1004                                      ; (int 1h)
+  1005 00000EE5 26A10400                    mov ax, [es:0x1 * 4]
+  1006 00000EE9 A3[0500]                    mov [oldtrapisr], ax
+  1007 00000EEC 26A10600                    mov ax, [es:0x1 * 4 + 2]
+  1008 00000EF0 A3[0700]                    mov [oldtrapisr + 2], ax
+  1009                                      ; breakpoint trap
+  1010                                      ; (int 3h)
+  1011 00000EF3 26A10C00                    mov ax, [es:0x3 * 4]
+  1012 00000EF7 A3[0900]                    mov [oldbrkisr], ax
+  1013 00000EFA 26A10E00                    mov ax, [es:0x3 * 4 + 2]
+  1014 00000EFE A3[0B00]                    mov [oldbrkisr + 2], ax
+  1015                                      ; COM port interrupt
+  1016                                      ; (int 0Ch)
+  1017 00000F01 26A13000                    mov ax, [es:0xC * 4]
+  1018 00000F05 A3[0D00]                    mov [oldcomisr], ax
+  1019 00000F08 26A13200                    mov ax, [es:0xC * 4 + 2]
+  1020 00000F0C A3[0F00]                    mov [oldcomisr + 2], ax
+  1021                                      ; return to parent process interrupt
+  1022                                      ; (int 22h)
+  1023 00000F0F 26A18800                    mov ax, [es:0x22 * 4]
+  1024 00000F13 A3[1100]                    mov [oldretisr], ax
+  1025 00000F16 26A18A00                    mov ax, [es:0x22 * 4 + 2]
+  1026 00000F1A A3[1300]                    mov [oldretisr + 2], ax
+  1027                                  
+  1028                                      ; hooking ISRs
+  1029                                  
+  1030 00000F1D FA                          cli
+  1031                                  
+  1032                                      ; single step trap
+  1033 00000F1E 26C7060400[AA0A]            mov word [es:0x1 * 4], trapisr
+  1034 00000F25 268C0E0600                  mov [es:0x1 * 4 + 2], cs
+  1035                                      ; breakpoint trap
+  1036 00000F2A 26C7060C00[0D0B]            mov word [es:0x3 * 4], brkisr
+  1037 00000F31 268C0E0E00                  mov [es:0x3 * 4 + 2], cs
+  1038                                      ; COM port interrupt
+  1039 00000F36 26C7063000[2C0C]            mov word [es:0xC * 4], comisr
+  1040 00000F3D 268C0E3200                  mov [es:0xC * 4 + 2], cs
+  1041                                      ; return to parent process interrupt
+  1042 00000F42 26C7068800[4F10]            mov word [es:0x22 * 4], return_to_parent
+  1043 00000F49 268C0E8A00                  mov [es:0x22 * 4 + 2], cs
+  1044                                  
+  1045                                      ; enabling interrupts
+  1046                                  
+  1047                                      ; enable OUT2
+  1048 00000F4E BAFC03                      mov dx, MCR
+  1049 00000F51 EC                          in al, dx
+  1050 00000F52 0C08                        or al, 8 ; enable bit 3 (OUT2)
+  1051 00000F54 EE                          out dx, al
+  1052                                      ; enable IER
+  1053 00000F55 BAF903                      mov dx, IER
+  1054 00000F58 EC                          in al, dx
+  1055 00000F59 0C01                        or al, 1
+  1056 00000F5B EE                          out dx, al
+  1057                                      ; enable PIC 
+  1058 00000F5C E421                        in al, 0x21
+  1059 00000F5E 24EF                        and al, 0xEF
+  1060 00000F60 E621                        out 0x21, al
+  1061                                  
+  1062 00000F62 FB                          sti
+  1063                                  
+  1064 00000F63 07                          pop es
+  1065 00000F64 58                          pop ax
+  1066                                  
+  1067 00000F65 C3                          ret
+  1068                                  
+  1069                                  unhookISR:
+  1070 00000F66 50                          push ax
+  1071 00000F67 06                          push es
+  1072                                  
+  1073 00000F68 31C0                        xor ax, ax
+  1074 00000F6A 8EC0                        mov es, ax
   1075                                  
-  1076 00000F55 07                          pop es
-  1077 00000F56 58                          pop ax
-  1078                                  
-  1079 00000F57 C3                          ret
-  1080                                  
-  1081                                  unhookISR:
-  1082 00000F58 50                          push ax
-  1083 00000F59 06                          push es
-  1084                                  
-  1085 00000F5A 31C0                        xor ax, ax
-  1086 00000F5C 8EC0                        mov es, ax
-  1087                                  
-  1088                                      ; restoring original ISRs
-  1089                                  
-  1090 00000F5E FA                          cli
-  1091                                  
-  1092                                      ; single step trap
-  1093                                      ; (int 1h)
-  1094 00000F5F A1[0500]                    mov ax, [oldtrapisr]
-  1095 00000F62 26A30400                    mov [es:0x1 * 4], ax
-  1096 00000F66 A1[0700]                    mov ax, [oldtrapisr + 2]
-  1097 00000F69 26A30600                    mov [es:0x1 * 4 + 2], ax
-  1098                                      ; breakpoint trap
-  1099                                      ; (int 3h)
-  1100 00000F6D A1[0900]                    mov ax, [oldbrkisr]
-  1101 00000F70 26A30C00                    mov [es:0x3 * 4], ax
-  1102 00000F74 A1[0B00]                    mov ax, [oldbrkisr + 2]
-  1103 00000F77 26A30E00                    mov [es:0x3 * 4 + 2], ax
-  1104                                      ; COM port interrupt
-  1105                                      ; (int 0Ch)
-  1106 00000F7B A1[0D00]                    mov ax, [oldcomisr]
-  1107 00000F7E 26A33000                    mov [es:0xC * 4], ax
-  1108 00000F82 A1[0F00]                    mov ax, [oldcomisr + 2]
-  1109 00000F85 26A33200                    mov [es:0xC * 4 + 2], ax
-  1110                                      ; return to parent process interrupt
-  1111                                      ; (int 22h)
-  1112 00000F89 A1[1100]                    mov ax, [oldretisr]
-  1113 00000F8C 26A38800                    mov [es:0x22 * 4], ax
-  1114 00000F90 A1[1300]                    mov ax, [oldretisr + 2]
-  1115 00000F93 26A38A00                    mov [es:0x22 * 4 + 2], ax
-  1116                                  
-  1117                                      ; disabling interrupts
-  1118                                  
-  1119                                      ; disable OUT2
-  1120 00000F97 BAFC03                      mov dx, MCR
-  1121 00000F9A EC                          in al, dx
-  1122 00000F9B 24F7                        and al, 0xF7 ; disable bit 3 (OUT2)
-  1123 00000F9D EE                          out dx, al
-  1124                                      ; disable IER
-  1125 00000F9E BAF903                      mov dx, IER
-  1126 00000FA1 30C0                        xor al, al
-  1127 00000FA3 EE                          out dx, al
-  1128                                      ; disable PIC 
-  1129 00000FA4 E421                        in al, 0x21
-  1130 00000FA6 0C10                        or al, 0x10
-  1131 00000FA8 E621                        out 0x21, al
-  1132                                  
-  1133 00000FAA FB                          sti
+  1076                                      ; restoring original ISRs
+  1077                                  
+  1078 00000F6C FA                          cli
+  1079                                  
+  1080                                      ; single step trap
+  1081                                      ; (int 1h)
+  1082 00000F6D A1[0500]                    mov ax, [oldtrapisr]
+  1083 00000F70 26A30400                    mov [es:0x1 * 4], ax
+  1084 00000F74 A1[0700]                    mov ax, [oldtrapisr + 2]
+  1085 00000F77 26A30600                    mov [es:0x1 * 4 + 2], ax
+  1086                                      ; breakpoint trap
+  1087                                      ; (int 3h)
+  1088 00000F7B A1[0900]                    mov ax, [oldbrkisr]
+  1089 00000F7E 26A30C00                    mov [es:0x3 * 4], ax
+  1090 00000F82 A1[0B00]                    mov ax, [oldbrkisr + 2]
+  1091 00000F85 26A30E00                    mov [es:0x3 * 4 + 2], ax
+  1092                                      ; COM port interrupt
+  1093                                      ; (int 0Ch)
+  1094 00000F89 A1[0D00]                    mov ax, [oldcomisr]
+  1095 00000F8C 26A33000                    mov [es:0xC * 4], ax
+  1096 00000F90 A1[0F00]                    mov ax, [oldcomisr + 2]
+  1097 00000F93 26A33200                    mov [es:0xC * 4 + 2], ax
+  1098                                      ; return to parent process interrupt
+  1099                                      ; (int 22h)
+  1100 00000F97 A1[1100]                    mov ax, [oldretisr]
+  1101 00000F9A 26A38800                    mov [es:0x22 * 4], ax
+  1102 00000F9E A1[1300]                    mov ax, [oldretisr + 2]
+  1103 00000FA1 26A38A00                    mov [es:0x22 * 4 + 2], ax
+  1104                                  
+  1105                                      ; disabling interrupts
+  1106                                  
+  1107                                      ; disable OUT2
+  1108 00000FA5 BAFC03                      mov dx, MCR
+  1109 00000FA8 EC                          in al, dx
+  1110 00000FA9 24F7                        and al, 0xF7 ; disable bit 3 (OUT2)
+  1111 00000FAB EE                          out dx, al
+  1112                                      ; disable IER
+  1113 00000FAC BAF903                      mov dx, IER
+  1114 00000FAF 30C0                        xor al, al
+  1115 00000FB1 EE                          out dx, al
+  1116                                      ; disable PIC 
+  1117 00000FB2 E421                        in al, 0x21
+  1118 00000FB4 0C10                        or al, 0x10
+  1119 00000FB6 E621                        out 0x21, al
+  1120                                  
+  1121 00000FB8 FB                          sti
+  1122                                  
+  1123 00000FB9 07                          pop es
+  1124 00000FBA 58                          pop ax
+  1125                                  
+  1126 00000FBB C3                          ret
+  1127                                  
+  1128                                  start:
+  1129                                      ;-----initialize COM port for debugging-----
+  1130 00000FBC B400                        mov ah, 0
+  1131 00000FBE B0E3                        mov al, 0xE3
+  1132 00000FC0 31D2                        xor dx, dx
+  1133 00000FC2 CD14                        int 0x14
   1134                                  
-  1135 00000FAB 07                          pop es
-  1136 00000FAC 58                          pop ax
+  1135                                      ;-----hook interrupt service routines-----
+  1136 00000FC4 E818FF                      call hookISR
   1137                                  
-  1138 00000FAD C3                          ret
-  1139                                  
-  1140                                  start:
-  1141                                      ;-----initialize COM port for debugging-----
-  1142 00000FAE B400                        mov ah, 0
-  1143 00000FB0 B0E3                        mov al, 0xE3
-  1144 00000FB2 31D2                        xor dx, dx
-  1145 00000FB4 CD14                        int 0x14
-  1146                                  
-  1147                                      ;-----hook interrupt service routines-----
-  1148 00000FB6 E818FF                      call hookISR
-  1149                                  
-  1150                                      ;-----read file path-----
-  1151 00000FB9 31C9                        xor cx, cx
-  1152 00000FBB 8A0E8000                    mov cl, [0x80]
-  1153 00000FBF 80F901                      cmp cl, 1
-  1154 00000FC2 0F8C8C00                    jl no_filepath
+  1138                                      ;-----read file path-----
+  1139 00000FC7 31C9                        xor cx, cx
+  1140 00000FC9 8A0E8000                    mov cl, [0x80]
+  1141 00000FCD 80F901                      cmp cl, 1
+  1142 00000FD0 0F8C9C00                    jl no_filepath
+  1143                                  
+  1144                                      ; remove trailing spaces
+  1145 00000FD4 FEC9                        dec cl
+  1146 00000FD6 BE8200                      mov si, 0x82
+  1147 00000FD9 BF[1500]                    mov di, filepath
+  1148 00000FDC FC                          cld
+  1149 00000FDD F3A4                        rep movsb
+  1150                                  
+  1151                                      ;-----resizing memory for debugger-----
+  1152 00000FDF BB[6412]                    mov bx, parentstack
+  1153 00000FE2 81C30F04                    add bx, 1024 + 15
+  1154 00000FE6 C1EB04                      shr bx, 4
   1155                                  
-  1156                                      ; remove trailing spaces
-  1157 00000FC6 FEC9                        dec cl
-  1158 00000FC8 BE8200                      mov si, 0x82
-  1159 00000FCB BF[1500]                    mov di, filepath
-  1160 00000FCE FC                          cld
-  1161 00000FCF F3A4                        rep movsb
-  1162                                  
-  1163                                      ;-----resizing memory for debugger-----
-  1164 00000FD1 BB[E411]                    mov bx, terminate
-  1165 00000FD4 83C314                      add bx, 20
-  1166 00000FD7 C1EB04                      shr bx, 4
+  1156 00000FE9 8CC8                        mov ax, cs
+  1157 00000FEB 8EC0                        mov es, ax
+  1158 00000FED B44A                        mov ah, 0x4A
+  1159 00000FEF CD21                        int 0x21
+  1160                                  
+  1161                                      ;-----allocating memory for child process-----
+  1162 00000FF1 B80048                      mov ax, 0x4800
+  1163 00000FF4 BB0010                      mov bx, 0x1000
+  1164 00000FF7 CD21                        int 0x21
+  1165 00000FF9 7279                        jc no_memory_available
+  1166 00000FFB A3[9500]                    mov [childseg], ax
   1167                                  
-  1168 00000FDA 8CC8                        mov ax, cs
-  1169 00000FDC 8EC0                        mov es, ax
-  1170 00000FDE B44A                        mov ah, 0x4A
-  1171 00000FE0 CD21                        int 0x21
-  1172                                  
-  1173                                      ;-----allocating memory for child process-----
-  1174 00000FE2 B80048                      mov ax, 0x4800
-  1175 00000FE5 BB0010                      mov bx, 0x1000
-  1176 00000FE8 CD21                        int 0x21
-  1177 00000FEA 726A                        jc no_memory_available
-  1178 00000FEC A3[9500]                    mov [childseg], ax
+  1168                                      ;-----creating psp for child process-----
+  1169 00000FFE B455                        mov ah, 0x55
+  1170 00001000 8B16[9500]                  mov dx, [childseg]
+  1171 00001004 BE0000                      mov si, 0
+  1172 00001007 CD21                        int 0x21
+  1173                                  
+  1174                                      ;-----open .COM file-----
+  1175 00001009 B8003D                      mov ax, 0x3D00
+  1176 0000100C BA[1500]                    mov dx, filepath
+  1177 0000100F CD21                        int 0x21
+  1178 00001011 725F                        jc file_not_found
   1179                                  
-  1180                                      ;-----creating psp for child process-----
-  1181 00000FEF B455                        mov ah, 0x55
-  1182 00000FF1 8B16[9500]                  mov dx, [childseg]
-  1183 00000FF5 BE0000                      mov si, 0
-  1184 00000FF8 CD21                        int 0x21
-  1185                                  
-  1186                                      ;-----open .COM file-----
-  1187 00000FFA B8003D                      mov ax, 0x3D00
-  1188 00000FFD BA[1500]                    mov dx, filepath
-  1189 00001000 CD21                        int 0x21
-  1190 00001002 7250                        jc file_not_found
-  1191                                  
-  1192                                      ;-----load .COM file into memory-----
-  1193 00001004 1E                          push ds
-  1194                                  
-  1195 00001005 89C3                        mov bx, ax
-  1196 00001007 B43F                        mov ah, 0x3F
-  1197 00001009 B9FFFF                      mov cx, 0xFFFF
-  1198 0000100C BA0001                      mov dx, 0x0100
-  1199 0000100F 8E1E[9500]                  mov ds, [childseg]
-  1200 00001013 CD21                        int 0x21
-  1201 00001015 7241                        jc file_not_read
-  1202                                  
-  1203 00001017 1F                          pop ds
-  1204                                  
-  1205                                      ;-----close .COM file-----
-  1206 00001018 B43E                        mov ah, 0x3E
-  1207 0000101A CD21                        int 0x21
-  1208                                  
-  1209                                      ;-----set up child process stack-----
-  1210 0000101C 8926[0300]                  mov [orig_sp], sp
-  1211                                  
-  1212 00001020 8E16[9500]                  mov ss, [childseg]
-  1213 00001024 BCFEFF                      mov sp, 0xFFFE
+  1180                                      ;-----load .COM file into memory-----
+  1181 00001013 1E                          push ds
+  1182                                  
+  1183 00001014 89C3                        mov bx, ax
+  1184 00001016 B43F                        mov ah, 0x3F
+  1185 00001018 B9FFFF                      mov cx, 0xFFFF
+  1186 0000101B BA0001                      mov dx, 0x0100
+  1187 0000101E 8E1E[9500]                  mov ds, [childseg]
+  1188 00001022 CD21                        int 0x21
+  1189 00001024 7250                        jc file_not_read
+  1190                                  
+  1191 00001026 1F                          pop ds
+  1192                                  
+  1193                                      ;-----close .COM file-----
+  1194 00001027 B43E                        mov ah, 0x3E
+  1195 00001029 CD21                        int 0x21
+  1196                                  
+  1197                                      ;-----initialize registers-----
+  1198 0000102B 8926[0300]                  mov [orig_sp], sp
+  1199 0000102F BCFEFF                      mov sp, 0xFFFE
+  1200                                  
+  1201 00001032 A1[9500]                    mov ax, [childseg]
+  1202 00001035 8ED8                        mov ds, ax
+  1203 00001037 8ED0                        mov ss, ax
+  1204 00001039 8EC0                        mov es, ax
+  1205                                  
+  1206 0000103B 9C                          pushf
+  1207 0000103C 50                          push ax
+  1208 0000103D 680001                      push word 0x0100
+  1209                                  
+  1210                                      ; wait till first continue packet arrives
+  1211                                  wait_for_continue:
+  1212 00001040 2E803E[E702]01              cmp byte [cs:startprogram], 1
+  1213 00001046 75F8                        jne wait_for_continue
   1214                                  
-  1215 00001027 9C                          pushf
-  1216 00001028 58                          pop ax
-  1217 00001029 0D0001                      or ax, 0x0100
-  1218 0000102C 50                          push ax
-  1219 0000102D FF36[9500]                  push word [childseg]
-  1220 00001031 680001                      push word 0x0100
-  1221                                  
-  1222 00001034 CF                          iret
-  1223                                  
-  1224                                      ;-----come back to original process-----
-  1225                                  return_to_parent:
-  1226                                      ; reset parent's registers
-  1227 00001035 8CC8                        mov ax, cs
-  1228 00001037 8ED8                        mov ds, ax
-  1229 00001039 8ED0                        mov ss, ax
-  1230 0000103B 8B26[0300]                  mov sp, [orig_sp]
-  1231                                  
-  1232                                      ; send reply to gdb that child exitted
-  1233 0000103F 803E[9700]00                cmp byte [firstpause], 0
-  1234 00001044 7406                        jz child_skipped
+  1215                                      ; reset as program is continuing (allegedly)
+  1216 00001048 2EC606[E602]00              mov byte [cs:inprocessing], 0
+  1217                                  
+  1218 0000104E CF                          iret
+  1219                                  
+  1220                                      ;-----come back to original process-----
+  1221                                  return_to_parent:
+  1222                                      ; reset parent's registers
+  1223 0000104F 8CC8                        mov ax, cs
+  1224 00001051 8ED8                        mov ds, ax
+  1225 00001053 8ED0                        mov ss, ax
+  1226 00001055 8EC0                        mov es, ax
+  1227 00001057 8B26[0300]                  mov sp, [orig_sp]
+  1228                                  
+  1229                                      ; send reply to gdb that child exitted
+  1230 0000105B 803E[E702]00                cmp byte [startprogram], 0
+  1231 00001060 7406                        jz child_skipped
+  1232                                  
+  1233 00001062 68[C703]                    push word exitreply
+  1234 00001065 E8A8FB                      call send_reply
   1235                                  
-  1236 00001046 68[C603]                    push word exitreply
-  1237 00001049 E8BBFB                      call send_reply
+  1236                                  child_skipped:
+  1237 00001068 E8FBFE                      call unhookISR
   1238                                  
-  1239                                  child_skipped:
-  1240 0000104C E809FF                      call unhookISR
+  1239 0000106B B8004C                      mov ax, 0x4C00
+  1240 0000106E CD21                        int 0x21
   1241                                  
-  1242 0000104F E99201                      jmp terminate
-  1243                                  
-  1244                                  ;-----error handling-----
-  1245                                  no_filepath:
-  1246 00001052 EBFE                        jmp no_filepath
-  1247                                  
-  1248                                  file_not_found:
-  1249 00001054 EBFE                        jmp file_not_found
-  1250                                  
-  1251                                  no_memory_available:
-  1252 00001056 EBFE                        jmp no_memory_available
-  1253                                  
-  1254                                  file_not_read:
-  1255 00001058 EBFE                        jmp file_not_read
-  1256                                  
-  1257                                  
-  1258                                  ; change extract_hex everywhere and use convertor to extract address if not value
-  1259                                  extract_hex:
-  1260                                      ; Parameters:
-  1261                                      ; [bp + 6] - address of value to extract
-  1262                                      ; [bp + 4] - length (max 8 for 32 bit address)
+  1242                                  ;-----error handling-----
+  1243                                  no_filepath:
+  1244 00001070 EBFE                        jmp no_filepath
+  1245                                  
+  1246                                  file_not_found:
+  1247 00001072 EBFE                        jmp file_not_found
+  1248                                  
+  1249                                  no_memory_available:
+  1250 00001074 EBFE                        jmp no_memory_available
+  1251                                  
+  1252                                  file_not_read:
+  1253 00001076 EBFE                        jmp file_not_read
+  1254                                  
+  1255                                  
+  1256                                  ; 
+  1257                                  push_parent_stack:
+  1258 00001078 2E8C16[5A12]                mov [cs:tempregs], ss
+  1259 0000107D 2E8926[5C12]                mov [cs:tempregs + 2], sp
+  1260 00001082 2E892E[5E12]                mov [cs:tempregs + 4], bp
+  1261 00001087 2EA3[6012]                  mov [cs:tempregs + 6], ax
+  1262 0000108B 2E891E[6212]                mov [cs:tempregs + 8], bx
   1263                                  
-  1264                                      ; Returns:
-  1265                                      ; [bp + 6] - higher word of 32 bit address
-  1266                                      ; [bp + 4] - lower word of 32 bit address
-  1267                                  
-  1268 0000105A 55                          push bp
-  1269 0000105B 89E5                        mov bp, sp
+  1264 00001090 5B                          pop bx
+  1265                                  
+  1266 00001091 89E5                        mov bp, sp
+  1267 00001093 2E8B26[6416]                mov sp, [cs:parentstack + 1024]
+  1268 00001098 8CC8                        mov ax, cs
+  1269 0000109A 8ED0                        mov ss, ax
   1270                                  
-  1271 0000105D 50                          push ax
-  1272 0000105E 51                          push cx
-  1273 0000105F 56                          push si
+  1271 0000109C FF7604                      push word [bp + 4]
+  1272 0000109F FF7602                      push word [bp + 2]
+  1273 000010A2 FF7600                      push word [bp + 0]
   1274                                  
-  1275 00001060 8B4E04                      mov cx, [bp + 4]
-  1276 00001063 8B7606                      mov si, [bp + 6]
-  1277                                  
-  1278 00001066 C746060000                  mov word [bp + 6], 0
-  1279 0000106B C746040000                  mov word [bp + 4], 0
-  1280                                  
-  1281                                  extract_next_hex:
-  1282 00001070 8A04                        mov al, [si]
-  1283 00001072 2C30                        sub al, 0x30
-  1284                                  
-  1285 00001074 3C0A                        cmp al, 10
-  1286 00001076 7202                        jb skip_extract_char
-  1287                                  
-  1288 00001078 2C27                        sub al, 0x27
+  1275 000010A5 FFE3                        jmp bx
+  1276                                  
+  1277                                  pop_parent_stack:
+  1278 000010A7 5B                          pop bx
+  1279                                  
+  1280 000010A8 89E5                        mov bp, sp
+  1281 000010AA 2E8B26[5C12]                mov sp, [cs:tempregs + 2]
+  1282 000010AF 2E8E16[5A12]                mov ss, [cs:tempregs]
+  1283                                  
+  1284 000010B4 83EC06                      sub sp, 6
+  1285 000010B7 FF7604                      push word [bp + 4]
+  1286 000010BA FF7602                      push word [bp + 2]
+  1287 000010BD FF7600                      push word [bp + 0]
+  1288 000010C0 53                          push bx
   1289                                  
-  1290                                  skip_extract_char:
-  1291                                      ; shift the 32 bit value left by 4 bits
-  1292 0000107A C1660604                    shl word [bp + 6], 4        ; higher nibble is empty
-  1293 0000107E C1460404                    rol word [bp + 4], 4        ; higher nibble that is to be shifted to bp+6 is now in lower nibble
-  1294                                  
-  1295 00001082 B40F                        mov ah, 0xF                 ; prepare mask
-  1296 00001084 226604                      and ah, [bp + 4]            ; extract the higher nibble
-  1297 00001087 836606F0                    and word [bp + 6], 0xFFF0   ; reset lower nibble of higher word
-  1298 0000108B 086606                      or [bp + 6], ah             ; pasted higher nibble to the higher word
-  1299                                  
-  1300 0000108E 836604F0                    and word [bp + 4], 0xFFF0   ; reset lower nibble of higher word
-  1301 00001092 084604                      or [bp + 4], al             ; pasted extracted lower nibble to the lower word
+  1290 000010C1 2E8B2E[5E12]                mov bp, [cs:tempregs + 4]
+  1291 000010C6 2EA1[6012]                  mov ax, [cs:tempregs + 6]
+  1292 000010CA 2E8B1E[6212]                mov bx, [cs:tempregs + 8]
+  1293                                  
+  1294 000010CF C3                          ret
+  1295                                  
+  1296                                  
+  1297                                  ; change extract_hex everywhere and use convertor to extract address if not value
+  1298                                  extract_hex:
+  1299                                      ; Parameters:
+  1300                                      ; [bp + 6] - address of value to extract
+  1301                                      ; [bp + 4] - length (max 8 for 32 bit address)
   1302                                  
-  1303 00001095 46                          inc si
-  1304 00001096 E2D8                        loop extract_next_hex
-  1305                                  
-  1306 00001098 5E                          pop si
-  1307 00001099 59                          pop cx
-  1308 0000109A 58                          pop ax
+  1303                                      ; Returns:
+  1304                                      ; [bp + 6] - higher word of 32 bit address
+  1305                                      ; [bp + 4] - lower word of 32 bit address
+  1306                                  
+  1307 000010D0 55                          push bp
+  1308 000010D1 89E5                        mov bp, sp
   1309                                  
-  1310 0000109B 5D                          pop bp
-  1311 0000109C C3                          ret
-  1312                                  
+  1310 000010D3 50                          push ax
+  1311 000010D4 51                          push cx
+  1312 000010D5 56                          push si
   1313                                  
-  1314                                  convert_to_ascii:
-  1315 0000109D 55                          push bp
-  1316 0000109E 89E5                        mov bp, sp
-  1317                                      
-  1318 000010A0 807E040A                    cmp byte [bp + 4], 10
-  1319 000010A4 7C04                        jl hex_digit
-  1320                                  
-  1321 000010A6 80460427                    add byte [bp + 4], 0x27
-  1322                                  
-  1323                                  hex_digit:
-  1324 000010AA 80460430                    add byte [bp + 4], 0x30
-  1325                                  
-  1326 000010AE 5D                          pop bp
-  1327 000010AF C3                          ret
+  1314 000010D6 8B4E04                      mov cx, [bp + 4]
+  1315 000010D9 8B7606                      mov si, [bp + 6]
+  1316                                  
+  1317 000010DC C746060000                  mov word [bp + 6], 0
+  1318 000010E1 C746040000                  mov word [bp + 4], 0
+  1319                                  
+  1320                                  extract_next_hex:
+  1321 000010E6 8A04                        mov al, [si]
+  1322 000010E8 2C30                        sub al, 0x30
+  1323                                  
+  1324 000010EA 3C0A                        cmp al, 10
+  1325 000010EC 7202                        jb skip_extract_char
+  1326                                  
+  1327 000010EE 2C27                        sub al, 0x27
   1328                                  
-  1329                                  
-  1330                                  ; converts a 32 bit physical address to a logical address in segment:offset format
-  1331                                  convert_physical_to_logical:
-  1332                                      ; Parameters:
-  1333                                      ; [bp + 6] - higher word of 32 bit physical address
-  1334                                      ; [bp + 4] - lower word of 32 bit physical address
-  1335                                  
-  1336                                      ; Returns:
-  1337                                      ; [bp + 6] - segment of logical address
-  1338                                      ; [bp + 4] - offset of logical address
-  1339                                  
-  1340 000010B0 55                          push bp
-  1341 000010B1 89E5                        mov bp, sp
-  1342                                  
-  1343 000010B3 50                          push ax
-  1344 000010B4 51                          push cx
-  1345 000010B5 52                          push dx
-  1346                                  
-  1347 000010B6 8B4604                      mov ax, [bp + 4]
-  1348 000010B9 8B5606                      mov dx, [bp + 6]
-  1349 000010BC B90400                      mov cx, 4
-  1350                                  
-  1351                                      ; mask to 20 bits
-  1352 000010BF 83E20F                      and dx, 0x000F
-  1353                                  
-  1354                                  segment_shift_loop:
-  1355 000010C2 D1EA                        shr dx, 1
-  1356 000010C4 D1D8                        rcr ax, 1
-  1357 000010C6 E2FA                        loop segment_shift_loop
-  1358                                  
-  1359 000010C8 894606                      mov [bp + 6], ax ; segment
-  1360 000010CB 8366040F                    and word [bp + 4], 0x000F ; keep only lower 4 bits of offset
+  1329                                  skip_extract_char:
+  1330                                      ; shift the 32 bit value left by 4 bits
+  1331 000010F0 C1660604                    shl word [bp + 6], 4        ; higher nibble is empty
+  1332 000010F4 C1460404                    rol word [bp + 4], 4        ; higher nibble that is to be shifted to bp+6 is now in lower nibble
+  1333                                  
+  1334 000010F8 B40F                        mov ah, 0xF                 ; prepare mask
+  1335 000010FA 226604                      and ah, [bp + 4]            ; extract the higher nibble
+  1336 000010FD 836606F0                    and word [bp + 6], 0xFFF0   ; reset lower nibble of higher word
+  1337 00001101 086606                      or [bp + 6], ah             ; pasted higher nibble to the higher word
+  1338                                  
+  1339 00001104 836604F0                    and word [bp + 4], 0xFFF0   ; reset lower nibble of higher word
+  1340 00001108 084604                      or [bp + 4], al             ; pasted extracted lower nibble to the lower word
+  1341                                  
+  1342 0000110B 46                          inc si
+  1343 0000110C E2D8                        loop extract_next_hex
+  1344                                  
+  1345 0000110E 5E                          pop si
+  1346 0000110F 59                          pop cx
+  1347 00001110 58                          pop ax
+  1348                                  
+  1349 00001111 5D                          pop bp
+  1350 00001112 C3                          ret
+  1351                                  
+  1352                                  
+  1353                                  convert_to_ascii:
+  1354 00001113 55                          push bp
+  1355 00001114 89E5                        mov bp, sp
+  1356                                      
+  1357 00001116 807E040A                    cmp byte [bp + 4], 10
+  1358 0000111A 7C04                        jl hex_digit
+  1359                                  
+  1360 0000111C 80460427                    add byte [bp + 4], 0x27
   1361                                  
-  1362 000010CF 5A                          pop dx
-  1363 000010D0 59                          pop cx
-  1364 000010D1 58                          pop ax
-  1365                                  
-  1366 000010D2 5D                          pop bp
-  1367 000010D3 C3                          ret
+  1362                                  hex_digit:
+  1363 00001120 80460430                    add byte [bp + 4], 0x30
+  1364                                  
+  1365 00001124 5D                          pop bp
+  1366 00001125 C3                          ret
+  1367                                  
   1368                                  
-  1369                                  
-  1370                                  ; doesn't handle substrings
-  1371                                  ; returns answer in zero flag
-  1372                                  check_packet:
-  1373                                      ; Parameters:
-  1374                                      ; [bp + 4] - packet to check against
-  1375                                  
-  1376 000010D4 55                          push bp
-  1377 000010D5 89E5                        mov bp, sp
+  1369                                  ; converts a 32 bit physical address to a logical address in segment:offset format
+  1370                                  convert_physical_to_logical:
+  1371                                      ; Parameters:
+  1372                                      ; [bp + 6] - higher word of 32 bit physical address
+  1373                                      ; [bp + 4] - lower word of 32 bit physical address
+  1374                                  
+  1375                                      ; Returns:
+  1376                                      ; [bp + 6] - segment of logical address
+  1377                                      ; [bp + 4] - offset of logical address
   1378                                  
-  1379 000010D7 50                          push ax
-  1380 000010D8 51                          push cx
-  1381 000010D9 56                          push si
-  1382 000010DA 57                          push di
-  1383 000010DB 06                          push es
-  1384                                  
-  1385 000010DC 1E                          push ds
-  1386 000010DD 07                          pop es
-  1387                                  
-  1388 000010DE B000                        mov al, 0
-  1389 000010E0 B90002                      mov cx, ARRAY_SIZE
-  1390 000010E3 8B7E04                      mov di, [bp + 4]
-  1391                                  
-  1392 000010E6 FC                          cld
-  1393 000010E7 F2AE                        repne scasb
-  1394                                  
-  1395 000010E9 B80002                      mov ax, ARRAY_SIZE
-  1396 000010EC 29C8                        sub ax, cx
-  1397 000010EE 48                          dec ax
-  1398 000010EF 89C1                        mov cx, ax
-  1399                                  
-  1400 000010F1 8B7E04                      mov di, [bp + 4]
-  1401 000010F4 BE[E600]                    mov si, packet + 1
-  1402                                  
-  1403 000010F7 F3A6                        repe cmpsb
+  1379 00001126 55                          push bp
+  1380 00001127 89E5                        mov bp, sp
+  1381                                  
+  1382 00001129 50                          push ax
+  1383 0000112A 51                          push cx
+  1384 0000112B 52                          push dx
+  1385                                  
+  1386 0000112C 8B4604                      mov ax, [bp + 4]
+  1387 0000112F 8B5606                      mov dx, [bp + 6]
+  1388 00001132 B90400                      mov cx, 4
+  1389                                  
+  1390                                      ; mask to 20 bits
+  1391 00001135 83E20F                      and dx, 0x000F
+  1392                                  
+  1393                                  segment_shift_loop:
+  1394 00001138 D1EA                        shr dx, 1
+  1395 0000113A D1D8                        rcr ax, 1
+  1396 0000113C E2FA                        loop segment_shift_loop
+  1397                                  
+  1398 0000113E 894606                      mov [bp + 6], ax ; segment
+  1399 00001141 8366040F                    and word [bp + 4], 0x000F ; keep only lower 4 bits of offset
+  1400                                  
+  1401 00001145 5A                          pop dx
+  1402 00001146 59                          pop cx
+  1403 00001147 58                          pop ax
   1404                                  
-  1405 000010F9 07                          pop es
-  1406 000010FA 5F                          pop di
-  1407 000010FB 5E                          pop si
-  1408 000010FC 59                          pop cx
-  1409 000010FD 58                          pop ax
-  1410                                  
-  1411 000010FE 5D                          pop bp
-  1412 000010FF C20200                      ret 2
-  1413                                  
+  1405 00001148 5D                          pop bp
+  1406 00001149 C3                          ret
+  1407                                  
+  1408                                  
+  1409                                  ; doesn't handle substrings
+  1410                                  ; returns answer in zero flag
+  1411                                  check_packet:
+  1412                                      ; Parameters:
+  1413                                      ; [bp + 4] - packet to check against
   1414                                  
-  1415                                  
-  1416                                  printdebug:
-  1417 00001102 E8C200                      call clrscrn
-  1418                                  
-  1419 00001105 BE0600                      mov si, 6
-  1420 00001108 B90C00                      mov cx, 12
-  1421 0000110B B80000                      mov ax, 0
-  1422 0000110E BB0500                      mov bx, 5
+  1415 0000114A 55                          push bp
+  1416 0000114B 89E5                        mov bp, sp
+  1417                                  
+  1418 0000114D 50                          push ax
+  1419 0000114E 51                          push cx
+  1420 0000114F 56                          push si
+  1421 00001150 57                          push di
+  1422 00001151 06                          push es
   1423                                  
-  1424                                  l3:
-  1425 00001111 50                          push ax
-  1426 00001112 53                          push bx
-  1427 00001113 8B12                        mov dx, [bp + si]
-  1428 00001115 52                          push dx
-  1429 00001116 E86100                      call printnum
-  1430 00001119 83EE02                      sub si, 2
-  1431 0000111C 40                          inc ax
-  1432 0000111D E2F2                        loop l3
+  1424 00001152 1E                          push ds
+  1425 00001153 07                          pop es
+  1426                                  
+  1427 00001154 B000                        mov al, 0
+  1428 00001156 B90002                      mov cx, ARRAY_SIZE
+  1429 00001159 8B7E04                      mov di, [bp + 4]
+  1430                                  
+  1431 0000115C FC                          cld
+  1432 0000115D F2AE                        repne scasb
   1433                                  
-  1434 0000111F B80000                      mov ax, 0
-  1435 00001122 BB0000                      mov bx, 0
-  1436 00001125 B90C00                      mov cx, 12
-  1437 00001128 BE0400                      mov si, 4
-  1438 0000112B BA[9800]                    mov dx, names
-  1439                                  
-  1440                                  l1:
-  1441 0000112E 50                          push ax
-  1442 0000112F 53                          push bx
-  1443 00001130 52                          push dx
-  1444 00001131 56                          push si
-  1445 00001132 E80700                      call printstr
-  1446 00001135 83C204                      add dx, 4
-  1447 00001138 40                          inc ax
-  1448 00001139 E2F3                        loop l1
+  1434 0000115F B80002                      mov ax, ARRAY_SIZE
+  1435 00001162 29C8                        sub ax, cx
+  1436 00001164 48                          dec ax
+  1437 00001165 89C1                        mov cx, ax
+  1438                                  
+  1439 00001167 8B7E04                      mov di, [bp + 4]
+  1440 0000116A BE[E500]                    mov si, packet + 1
+  1441                                  
+  1442 0000116D F3A6                        repe cmpsb
+  1443                                  
+  1444 0000116F 07                          pop es
+  1445 00001170 5F                          pop di
+  1446 00001171 5E                          pop si
+  1447 00001172 59                          pop cx
+  1448 00001173 58                          pop ax
   1449                                  
-  1450 0000113B C3                          ret
-  1451                                  
+  1450 00001174 5D                          pop bp
+  1451 00001175 C20200                      ret 2
   1452                                  
-  1453 0000113C 55                      printstr: push bp
-  1454 0000113D 89E5                    mov bp, sp
-  1455 0000113F 06                      push es
-  1456 00001140 50                      push ax
-  1457 00001141 53                      push bx
-  1458 00001142 51                      push cx
-  1459 00001143 52                      push dx
-  1460 00001144 56                      push si
-  1461 00001145 57                      push di
-  1462 00001146 B800B8                  mov ax, 0xb800
-  1463 00001149 8EC0                    mov es, ax ; point es to video base
-  1464 0000114B BF5000                  mov di, 80 ; load di with columns per row
-  1465 0000114E 8B460A                  mov ax, [bp+10] ; load ax with row number
-  1466 00001151 F7E7                    mul di ; multiply with columns per row
-  1467 00001153 89C7                    mov di, ax ; save result in di
-  1468 00001155 037E08                  add di, [bp+8] ; add column number
-  1469 00001158 D1E7                    shl di, 1 ; turn into byte count
-  1470 0000115A 8B7606                  mov si, [bp+6] ; string to be printed
-  1471 0000115D 8B4E04                  mov cx, [bp+4] ; length of string
-  1472 00001160 B407                    mov ah, 0x07 ; normal attribute is fixed
-  1473 00001162 8A04                    nextchar: mov al, [si] ; load next char of string
-  1474 00001164 268905                  mov [es:di], ax ; show next char on screen
-  1475 00001167 83C702                  add di, 2 ; move to next screen location
-  1476 0000116A 83C601                  add si, 1 ; move to next char
-  1477 0000116D E2F3                    loop nextchar ; repeat the operation cx times
-  1478 0000116F 5F                      pop di
-  1479 00001170 5E                      pop si
-  1480 00001171 5A                      pop dx
-  1481 00001172 59                      pop cx
-  1482 00001173 5B                      pop bx
-  1483 00001174 58                      pop ax
-  1484 00001175 07                      pop es
-  1485 00001176 5D                      pop bp
-  1486 00001177 C20800                  ret 8
-  1487                                  
+  1453                                  
+  1454                                  
+  1455                                  printdebug:
+  1456 00001178 E8C200                      call clrscrn
+  1457                                  
+  1458 0000117B BE0600                      mov si, 6
+  1459 0000117E B90C00                      mov cx, 12
+  1460 00001181 B80000                      mov ax, 0
+  1461 00001184 BB0500                      mov bx, 5
+  1462                                  
+  1463                                  l3:
+  1464 00001187 50                          push ax
+  1465 00001188 53                          push bx
+  1466 00001189 8B12                        mov dx, [bp + si]
+  1467 0000118B 52                          push dx
+  1468 0000118C E86100                      call printnum
+  1469 0000118F 83EE02                      sub si, 2
+  1470 00001192 40                          inc ax
+  1471 00001193 E2F2                        loop l3
+  1472                                  
+  1473 00001195 B80000                      mov ax, 0
+  1474 00001198 BB0000                      mov bx, 0
+  1475 0000119B B90C00                      mov cx, 12
+  1476 0000119E BE0400                      mov si, 4
+  1477 000011A1 BA[9700]                    mov dx, names
+  1478                                  
+  1479                                  l1:
+  1480 000011A4 50                          push ax
+  1481 000011A5 53                          push bx
+  1482 000011A6 52                          push dx
+  1483 000011A7 56                          push si
+  1484 000011A8 E80700                      call printstr
+  1485 000011AB 83C204                      add dx, 4
+  1486 000011AE 40                          inc ax
+  1487 000011AF E2F3                        loop l1
   1488                                  
-  1489 0000117A 55                      printnum: push bp
-  1490 0000117B 89E5                    mov bp, sp
-  1491 0000117D 06                      push es
-  1492 0000117E 50                      push ax
-  1493 0000117F 53                      push bx
-  1494 00001180 51                      push cx
-  1495 00001181 52                      push dx
-  1496 00001182 57                      push di
-  1497 00001183 BF5000                  mov di, 80 ; load di with columns per row
-  1498 00001186 8B4608                  mov ax, [bp+8] ; load ax with row number
-  1499 00001189 F7E7                    mul di ; multiply with columns per row
-  1500 0000118B 89C7                    mov di, ax ; save result in di
-  1501 0000118D 037E06                  add di, [bp+6] ; add column number
-  1502 00001190 D1E7                    shl di, 1 ; turn into byte count
-  1503 00001192 83C708                  add di, 8 ; to end of number location
-  1504 00001195 B800B8                  mov ax, 0xb800
-  1505 00001198 8EC0                    mov es, ax ; point es to video base
-  1506 0000119A 8B4604                  mov ax, [bp+4] ; load number in ax
-  1507 0000119D BB1000                  mov bx, 16 ; use base 16 for division
-  1508 000011A0 B90400                  mov cx, 4 ; initialize count of digits
-  1509 000011A3 BA0000                  nextdigit: mov dx, 0 ; zero upper half of dividend
-  1510 000011A6 F7F3                    div bx ; divide by 10
-  1511 000011A8 80C230                  add dl, 0x30 ; convert digit into ascii value
-  1512 000011AB 80FA39                  cmp dl, 0x39 ; is the digit an alphabet
-  1513 000011AE 7603                    jbe skipalpha ; no, skip addition
-  1514 000011B0 80C207                  add dl, 7 ; yes, make in alphabet code
-  1515 000011B3 B607                    skipalpha: mov dh, 0x07 ; attach normal attribute
-  1516 000011B5 268915                  mov [es:di], dx ; print char on screen
-  1517 000011B8 83EF02                  sub di, 2 ; to previous screen location
-  1518 000011BB E2E6                    loop nextdigit ; if no divide it again
-  1519 000011BD 5F                      pop di
-  1520 000011BE 5A                      pop dx
-  1521 000011BF 59                      pop cx
-  1522 000011C0 5B                      pop bx
-  1523 000011C1 58                      pop ax
-  1524 000011C2 07                      pop es
-  1525 000011C3 5D                      pop bp
-  1526 000011C4 C20600                  ret 6
+  1489 000011B1 C3                          ret
+  1490                                  
+  1491                                  
+  1492 000011B2 55                      printstr: push bp
+  1493 000011B3 89E5                    mov bp, sp
+  1494 000011B5 06                      push es
+  1495 000011B6 50                      push ax
+  1496 000011B7 53                      push bx
+  1497 000011B8 51                      push cx
+  1498 000011B9 52                      push dx
+  1499 000011BA 56                      push si
+  1500 000011BB 57                      push di
+  1501 000011BC B800B8                  mov ax, 0xb800
+  1502 000011BF 8EC0                    mov es, ax ; point es to video base
+  1503 000011C1 BF5000                  mov di, 80 ; load di with columns per row
+  1504 000011C4 8B460A                  mov ax, [bp+10] ; load ax with row number
+  1505 000011C7 F7E7                    mul di ; multiply with columns per row
+  1506 000011C9 89C7                    mov di, ax ; save result in di
+  1507 000011CB 037E08                  add di, [bp+8] ; add column number
+  1508 000011CE D1E7                    shl di, 1 ; turn into byte count
+  1509 000011D0 8B7606                  mov si, [bp+6] ; string to be printed
+  1510 000011D3 8B4E04                  mov cx, [bp+4] ; length of string
+  1511 000011D6 B407                    mov ah, 0x07 ; normal attribute is fixed
+  1512 000011D8 8A04                    nextchar: mov al, [si] ; load next char of string
+  1513 000011DA 268905                  mov [es:di], ax ; show next char on screen
+  1514 000011DD 83C702                  add di, 2 ; move to next screen location
+  1515 000011E0 83C601                  add si, 1 ; move to next char
+  1516 000011E3 E2F3                    loop nextchar ; repeat the operation cx times
+  1517 000011E5 5F                      pop di
+  1518 000011E6 5E                      pop si
+  1519 000011E7 5A                      pop dx
+  1520 000011E8 59                      pop cx
+  1521 000011E9 5B                      pop bx
+  1522 000011EA 58                      pop ax
+  1523 000011EB 07                      pop es
+  1524 000011EC 5D                      pop bp
+  1525 000011ED C20800                  ret 8
+  1526                                  
   1527                                  
-  1528                                  
-  1529 000011C7 06                      clrscrn: push es
-  1530 000011C8 50                      push ax
-  1531 000011C9 57                      push di
-  1532 000011CA B800B8                  mov ax, 0xb800
-  1533 000011CD 8EC0                    mov es, ax ; point es to video base
-  1534 000011CF BF0000                  mov di, 0 ; point di to top left column
-  1535 000011D2 26C7052007              nextloc: mov word [es:di], 0x0720 ; clear next char on screen
-  1536 000011D7 83C702                  add di, 2 ; move to next screen location
-  1537 000011DA 81FFA00F                cmp di, 4000 ; has the whole screen cleared
-  1538 000011DE 75F2                    jne nextloc ; if no clear next position
-  1539 000011E0 5F                      pop di
-  1540 000011E1 58                      pop ax
-  1541 000011E2 07                      pop es
-  1542 000011E3 C3                      ret
-  1543                                  
-  1544                                  
-  1545                                  
-  1546                                  terminate:
-  1547 000011E4 B8004C                      mov ax, 4C00h
-  1548 000011E7 CD21                        int 21h
+  1528 000011F0 55                      printnum: push bp
+  1529 000011F1 89E5                    mov bp, sp
+  1530 000011F3 06                      push es
+  1531 000011F4 50                      push ax
+  1532 000011F5 53                      push bx
+  1533 000011F6 51                      push cx
+  1534 000011F7 52                      push dx
+  1535 000011F8 57                      push di
+  1536 000011F9 BF5000                  mov di, 80 ; load di with columns per row
+  1537 000011FC 8B4608                  mov ax, [bp+8] ; load ax with row number
+  1538 000011FF F7E7                    mul di ; multiply with columns per row
+  1539 00001201 89C7                    mov di, ax ; save result in di
+  1540 00001203 037E06                  add di, [bp+6] ; add column number
+  1541 00001206 D1E7                    shl di, 1 ; turn into byte count
+  1542 00001208 83C708                  add di, 8 ; to end of number location
+  1543 0000120B B800B8                  mov ax, 0xb800
+  1544 0000120E 8EC0                    mov es, ax ; point es to video base
+  1545 00001210 8B4604                  mov ax, [bp+4] ; load number in ax
+  1546 00001213 BB1000                  mov bx, 16 ; use base 16 for division
+  1547 00001216 B90400                  mov cx, 4 ; initialize count of digits
+  1548 00001219 BA0000                  nextdigit: mov dx, 0 ; zero upper half of dividend
+  1549 0000121C F7F3                    div bx ; divide by 10
+  1550 0000121E 80C230                  add dl, 0x30 ; convert digit into ascii value
+  1551 00001221 80FA39                  cmp dl, 0x39 ; is the digit an alphabet
+  1552 00001224 7603                    jbe skipalpha ; no, skip addition
+  1553 00001226 80C207                  add dl, 7 ; yes, make in alphabet code
+  1554 00001229 B607                    skipalpha: mov dh, 0x07 ; attach normal attribute
+  1555 0000122B 268915                  mov [es:di], dx ; print char on screen
+  1556 0000122E 83EF02                  sub di, 2 ; to previous screen location
+  1557 00001231 E2E6                    loop nextdigit ; if no divide it again
+  1558 00001233 5F                      pop di
+  1559 00001234 5A                      pop dx
+  1560 00001235 59                      pop cx
+  1561 00001236 5B                      pop bx
+  1562 00001237 58                      pop ax
+  1563 00001238 07                      pop es
+  1564 00001239 5D                      pop bp
+  1565 0000123A C20600                  ret 6
+  1566                                  
+  1567                                  
+  1568 0000123D 06                      clrscrn: push es
+  1569 0000123E 50                      push ax
+  1570 0000123F 57                      push di
+  1571 00001240 B800B8                  mov ax, 0xb800
+  1572 00001243 8EC0                    mov es, ax ; point es to video base
+  1573 00001245 BF0000                  mov di, 0 ; point di to top left column
+  1574 00001248 26C7052007              nextloc: mov word [es:di], 0x0720 ; clear next char on screen
+  1575 0000124D 83C702                  add di, 2 ; move to next screen location
+  1576 00001250 81FFA00F                cmp di, 4000 ; has the whole screen cleared
+  1577 00001254 75F2                    jne nextloc ; if no clear next position
+  1578 00001256 5F                      pop di
+  1579 00001257 58                      pop ax
+  1580 00001258 07                      pop es
+  1581 00001259 C3                      ret
+  1582                                  
+  1583 0000125A 000000000000000000-     tempregs:       dw 0, 0, 0, 0, 0       ; SS, SP, BP, AX, BX
+  1583 00001263 00                 
+  1584 00001264 0000<rep 200h>          parentstack:    times ARRAY_SIZE dw 0
