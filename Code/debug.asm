@@ -1,3 +1,11 @@
+; CHECK ALL PACKET INPUTS
+; CHECK ALL PACKET OUTPUTS
+; implement custom stack for parent process so that parent does not hog child process stack
+; check why exit not sent (2) debugger does not exit after program exits (3) as long as connection exists gdb won't exit
+; improve documentation
+; remove extraneous stuff 
+; wherever CS is used, compare with childseg and fix it if not equal (2) no idea where where used. 2 are in trapisr and brkisr
+
 [org 0x0100]
 
     jmp start
@@ -124,20 +132,37 @@ child_skipped:
 
 ;-----error handling-----
 no_filepath:
-    jmp no_filepath
+    mov dx, no_filepath_msg
+
+    jmp handle_error
 
 file_not_found:
-    jmp file_not_found
+    mov dx, file_not_found_msg
+
+    jmp handle_error
 
 no_memory_available:
-    jmp no_memory_available
+    mov dx, no_mem_aval_msg
+
+    jmp handle_error
 
 file_not_read:
-    jmp file_not_read
+    pop ds
+    mov dx, file_not_read_msg
+
+    jmp handle_error
+
+handle_error:
+    mov ah, 0x09
+    int 0x21
+
+    mov ax, 0x4C00
+    int 0x21
 
 
 ;-------------------------ISR functions-------------------------
 
+; function for hooking all necessary ISRs and initializing COM ports
 hookISR: 
     push ax
     push es
@@ -213,6 +238,8 @@ hookISR:
 
     ret
 
+
+; function for unhooking all ISRs and disabling COM ports
 unhookISR:
     push ax
     push es
@@ -272,6 +299,7 @@ unhookISR:
 
     ret
 
+
 ; (int 0x1)
 trapisr:
     push bp
@@ -286,7 +314,7 @@ trapisr:
 
     ; check if breakpoint was set in previous instruction
     cmp byte [reinstallbrk], 1
-    jne send_stop_response
+    jne resume_trap_activity
 
     mov al, 0xCC
     mov di, [tempbrkaddr]
@@ -300,11 +328,8 @@ trapisr:
     cmp byte [forcepause], 1
     jz packet_continue
 
-send_stop_response:
-    push word stopreply
-    call send_reply
-
-    call save_registers
+resume_trap_activity:
+    call debug_activity
     
     ; wait for comisr to receive a packet
     sti
@@ -321,13 +346,15 @@ wait_packet:
 
     jmp wait_packet
 
-packet_step:
-    or word [bp + 6], 0x0100
+packet_continue:
+    and word [bp + 6], 0xFEFF
 
     jmp wait_packet_done
 
-packet_continue:
-    and word [bp + 6], 0xFEFF
+packet_step:
+    or word [bp + 6], 0x0100
+
+    call check_interrupt
 
 wait_packet_done:
     mov byte [inprocessing], 0
@@ -339,6 +366,7 @@ wait_packet_done:
 
     pop bp
     iret
+
 
 ; (int 0x3)
 brkisr:
@@ -359,7 +387,20 @@ brkisr:
     ; ----- ideally check if es contains the same segment as childseg and fix ip if not
     mov es, [bp + 4]
     mov di, [bp + 2]
-    
+
+    ; check if normal or temporary interrupt breakpoint was set
+    cmp byte [intopcode], 0xCC
+    je normal_breakpoint
+
+    mov al, [intopcode]
+    ; reset with breakpoint opcode to differentiate. also helps if a breakpoint is already set
+    mov byte [intopcode], 0xCC
+
+    stosb
+
+    jmp resume_brk_activity
+
+normal_breakpoint:
     ; set flags to indicate re-installation of breakpoint
     mov byte [reinstallbrk], 1
     mov word [tempbrkaddr], di
@@ -375,11 +416,8 @@ brkisr:
     lodsb
     stosb
 
-    ; send stop reply
-    push word stopreply
-    call send_reply
-    ; save register values
-    call save_registers
+resume_brk_activity:
+    call debug_activity
     
     ; wait for comisr to receive a packet
     sti
@@ -406,12 +444,15 @@ normal_step:
     ; initialize trap flag for breakpoint restoration
     or word [bp + 6], 0x0100
 
+    call check_interrupt
+
     pop es
     pop ds
     popa
 
     pop bp
     iret
+
 
 ; (int 0xC)
 comisr:
@@ -446,6 +487,10 @@ comisr:
     jmp storepacket
 
 insidepacket:
+    ; skip if noise meaning packet not started
+    cmp byte [packet], 0
+    je nodata
+
     cmp al, '#'
     je chksumstarted
 
@@ -471,6 +516,8 @@ storepacket:
 
     ; setting packet processing flag
     mov byte [inprocessing], 1
+    ; remove $ from packet to signify packet completion
+    mov byte [packet], 0
 
     ; process the received packet
     call packet_processor
@@ -485,6 +532,68 @@ nodata:
     
     pop bp
     iret
+
+
+;-------------------------debug helper functions-------------------------
+
+; check for interrupt instruction and apply temporary breakpoint
+check_interrupt:
+    mov es, [bp + 4]
+    mov di, [bp + 2]
+    mov al, [es:di]
+
+    ; check if next instruction is an interrupt
+    cmp al, 0xCD
+    jne check_interrupt_done
+
+    ; store next instructions opcode. if already a breakpoint then will ignore it due to default value
+    mov al, [es:di + 2]
+    mov [intopcode], al
+    ; apply temporary breakpoint and will be restored in brkisr
+    mov byte [es:di + 2], 0xCC
+
+check_interrupt_done:
+    ret
+
+
+; actions performed when debugger stops at instruction
+debug_activity:
+    ; send reply to gdb that child stopped
+    push word stopreply
+    call send_reply
+
+    ; saving registers
+    mov ax, [bp - 2]
+    mov [regs + 0], ax  ; AX
+    mov ax, [bp - 8]
+    mov [regs + 2], ax  ; BX
+    mov ax, [bp - 4]
+    mov [regs + 4], ax  ; CX
+    mov ax, [bp - 6]
+    mov [regs + 6], ax  ; DX
+    mov ax, [bp - 14]
+    mov [regs + 8], ax  ; SI
+    mov ax, [bp - 16]
+    mov [regs + 10], ax ; DI
+    mov ax, [bp]
+    mov [regs + 12], ax ; BP
+    mov ax, [bp - 10]
+    sub ax, 8
+    mov [regs + 14], ax ; SP
+    mov ax, [bp + 2]
+    mov [regs + 16], ax ; IP
+    mov ax, [bp + 6]
+    mov [regs + 18], ax ; FLAGS
+    mov ax, [bp + 4]
+    mov [regs + 20], ax ; CS
+    mov ax, [bp - 18]
+    mov [regs + 22], ax ; DS
+    mov ax, [bp - 20]
+    mov [regs + 24], ax ; ES
+    mov [regs + 26], ss ; SS
+
+    ret
+
 
 ;-------------------------packet processing functions-------------------------
 packet_processor:
@@ -549,6 +658,7 @@ terminate_packet_processing:
 
     ret
 
+
 gdb_support:
     push word supportreply
     call send_reply
@@ -597,6 +707,7 @@ gdb_why:
 
     jmp terminate_packet_processing
 
+
 gdb_kill:
     ; no need to send reply
     mov byte [startprogram], 0
@@ -605,6 +716,7 @@ gdb_kill:
     mov ax, 0x4c00
     int 0x21
 
+
 gdb_debugger:
     ; toggle flag to start the child program's execution
     mov byte [startprogram], 1
@@ -612,6 +724,7 @@ gdb_debugger:
     xor byte [inprocessing], 1
 
     jmp terminate_packet_processing
+
 
 gdb_extract_register:
     push word packet + 2
@@ -646,6 +759,7 @@ gdb_extract_register:
     pop ax
 
     jmp terminate_packet_processing
+
 
 gdb_send_registers:
     push word '$'
@@ -749,6 +863,7 @@ remove_breakpoint_error:
 
     jmp terminate_packet_processing
 
+
 gdb_read_memory:
     ; extract length of address in packet
     mov al, ','
@@ -826,6 +941,7 @@ no_wrap_in_memory:
 
     jmp terminate_packet_processing
 
+
 ; check this
 gdb_write_memory:
     ; extract length of address in packet
@@ -888,7 +1004,6 @@ write_memory_loop:
     loop write_memory_loop
 
     jmp gdb_ok
-
 
 
 ;-------------------------breakpoint setting functions-------------------------
@@ -1086,6 +1201,7 @@ done_remove:
     pop bp
     ret 2
 
+
 ;-------------------------COM port functions-------------------------
 
 ; send a byte through COM port
@@ -1189,43 +1305,6 @@ replyloop:
 
 ;-------------------------miscellaneous functions-------------------------
 
-; saving register states for debugging (used in trapisr and brkisr)
-save_registers:
-    push ax
-
-    mov ax, [bp - 2]
-    mov [regs + 0], ax  ; AX
-    mov ax, [bp - 8]
-    mov [regs + 2], ax  ; BX
-    mov ax, [bp - 4]
-    mov [regs + 4], ax  ; CX
-    mov ax, [bp - 6]
-    mov [regs + 6], ax  ; DX
-    mov ax, [bp - 14]
-    mov [regs + 8], ax  ; SI
-    mov ax, [bp - 16]
-    mov [regs + 10], ax ; DI
-    mov ax, [bp]
-    mov [regs + 12], ax ; BP
-    mov ax, [bp - 10]
-    sub ax, 8
-    mov [regs + 14], ax ; SP
-    mov ax, [bp + 2]
-    mov [regs + 16], ax ; IP
-    mov ax, [bp + 6]
-    mov [regs + 18], ax ; FLAGS
-    mov ax, [bp + 4]
-    mov [regs + 20], ax ; CS
-    mov ax, [bp - 18]
-    mov [regs + 22], ax ; DS
-    mov ax, [bp - 20]
-    mov [regs + 24], ax ; ES
-    mov [regs + 26], ss ; SS
-
-    pop ax
-    ret
-
-
 ; transfer to parent process stack
 push_parent_stack:
     mov [cs:tempregs], ss
@@ -1247,6 +1326,7 @@ push_parent_stack:
 
     jmp bx
 
+
 pop_parent_stack:
     pop bx
 
@@ -1267,15 +1347,16 @@ pop_parent_stack:
     ret
 
 
-; change extract_hex everywhere and use convertor to extract address if not value
+; extracts hex value for equivalent ASCII string
+; e.g. "1234" -> 0x1234
 extract_hex:
     ; Parameters:
     ; [bp + 6] - address of value to extract
     ; [bp + 4] - length (max 8 for 32 bit address)
 
     ; Returns:
-    ; [bp + 6] - higher word of 32 bit address
-    ; [bp + 4] - lower word of 32 bit address
+    ; [bp + 6] - higher word of 32 bit value
+    ; [bp + 4] - lower word of 32 bit value
 
     push bp
     mov bp, sp
@@ -1323,6 +1404,7 @@ skip_extract_char:
     ret
 
 
+; converts a byte value to its ASCII representation
 convert_to_ascii:
     ; Parameters:
     ; [bp + 4] - byte value to convert to ASCII
@@ -1385,8 +1467,8 @@ segment_shift_loop:
     ret
 
 
+; checks if the current packet matches the given packet
 ; doesn't handle substrings
-; returns answer in zero flag
 check_packet:
     ; Parameters:
     ; [bp + 4] - packet to check against
@@ -1511,6 +1593,12 @@ skipalpha: mov dh, 0x07 ; attach normal attribute
 
 ;--------------------------data segment-------------------------
 
+;-----Error handling strings-----
+no_filepath_msg:    db 'No File Path was Provided$'
+file_not_found_msg: db 'File could not be Found$'
+no_mem_aval_msg:    db 'No Memory is Available for Program$'
+file_not_read_msg:  db 'File could not be Read$'
+
 ;-----GDB protocol packets-----
 supportPack:    db 'qSupported', 0
 contPack:       db 'vCont?', 0
@@ -1558,6 +1646,7 @@ startprogram:   db 0
 forcepause:     db 0
 
 ;-----breakpoint variables-----
+intopcode:      db 0xCC
 reinstallbrk:   db 0
 tempbrkaddr:    dw 0
 opcodearrsize:  dw 0
