@@ -562,35 +562,35 @@ debug_activity:
     push word stopreply
     call send_reply
 
-    ; saving registers
+    ; saving padded registers in 32 bit form with upper 16 bits zeroed
     mov ax, [bp - 2]
     mov [regs + 0], ax  ; AX
     mov ax, [bp - 8]
-    mov [regs + 2], ax  ; BX
+    mov [regs + 12], ax  ; BX
     mov ax, [bp - 4]
     mov [regs + 4], ax  ; CX
     mov ax, [bp - 6]
-    mov [regs + 6], ax  ; DX
+    mov [regs + 8], ax  ; DX
     mov ax, [bp - 14]
-    mov [regs + 8], ax  ; SI
+    mov [regs + 24], ax  ; SI
     mov ax, [bp - 16]
-    mov [regs + 10], ax ; DI
+    mov [regs + 28], ax ; DI
     mov ax, [bp]
-    mov [regs + 12], ax ; BP
+    mov [regs + 20], ax ; BP
     mov ax, [bp - 10]
     sub ax, 8
-    mov [regs + 14], ax ; SP
+    mov [regs + 16], ax ; SP
     mov ax, [bp + 2]
-    mov [regs + 16], ax ; IP
+    mov [regs + 32], ax ; IP
     mov ax, [bp + 6]
-    mov [regs + 18], ax ; FLAGS
+    mov [regs + 36], ax ; FLAGS
     mov ax, [bp + 4]
-    mov [regs + 20], ax ; CS
+    mov [regs + 40], ax ; CS
     mov ax, [bp - 18]
-    mov [regs + 22], ax ; DS
+    mov [regs + 48], ax ; DS
     mov ax, [bp - 20]
-    mov [regs + 24], ax ; ES
-    mov [regs + 26], ss ; SS
+    mov [regs + 52], ax ; ES
+    mov [regs + 44], ss ; SS
 
     ret
 
@@ -733,7 +733,7 @@ gdb_extract_register:
     pop di
     pop ax
 
-    shl di, 1
+    shl di, 2
     xor ax, ax
     xor bx, bx
 
@@ -1637,7 +1637,7 @@ filepath:       times 128 db 0
 
 ;-----debugger data-----
 childseg:       dw 0
-regs:           times 14 dw 0
+regs:           times 16 dd 0
 packet:         times ARRAY_SIZE db 0
 packettail:     dw packet
 inprocessing:   db 0
